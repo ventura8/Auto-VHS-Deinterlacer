@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+.mypy_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.env
+# Virtual Environments
+.venv/
+.ci_venv/
+.venv_corrupt/
+.venv_locked/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Project Specific
+*_intermediate.mov
+*_temp_script.vpy
+temp_render_script.vpy
+temp_video_only.mov
+temp_video_only.mkv
+*.log
+*.vpy
+test_full.vpy
+*.ffindex
+*.lwi
+dummy_ffmpeg.bat
+
+# Generated Launcher (created by install.ps1)
+start.bat
+
+# VapourSynth & Plugins (Portable / Local)
+vs-plugins/
+vsutil/
+vsutil-*.dist-info/
+mvsfunc/
+havsfunc.py
+nnedi3_resample.py
+adjust.py
+vspackages3.json
+wheel_files.txt
+
+# Input/Output directories (optional, but keeps repo clean)
+input/
+output/
+*_deinterlaced.mov
+*_deinterlaced.mkv
+*_deinterlaced.mp4
+
+# Video Files (General)
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.ts
+*.m2ts
+
+# User specific config overrides
+# config_local.yaml
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200">
+  <defs>
+    <!-- 80s Chrome Gradient for Text -->
+    <linearGradient id="chrome" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#00ffff;stop-opacity:1" />
+      <stop offset="45%" style="stop-color:#ffffff;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#000000;stop-opacity:1" />
+      <stop offset="55%" style="stop-color:#ff00ff;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#800080;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- Neon Glow Filter -->
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2.5" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- VHS Tape Body Gradient -->
+    <linearGradient id="tapeBody" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#333;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#111;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- VHS TAPE ICON (Left Side) -->
+  <g transform="translate(20, 30) scale(0.8)">
+     <!-- Shadow -->
+     <rect x="10" y="10" width="280" height="160" rx="5" fill="#00ffff" opacity="0.3" filter="url(#glow)"/>
+     
+     <!-- Main Body -->
+     <rect x="0" y="0" width="280" height="160" rx="5" fill="url(#tapeBody)" stroke="#444" stroke-width="2"/>
+     
+     <!-- Top Lid Area -->
+     <rect x="30" y="10" width="220" height="30" rx="2" fill="#222" stroke="#111"/>
+     
+     <!-- Label Window -->
+     <rect x="40" y="55" width="200" height="40" rx="2" fill="#eee" opacity="0.9"/>
+     <rect x="45" y="60" width="190" height="30" fill="none" stroke="#ddd" stroke-width="1"/>
+     
+     <!-- Reels (Left) -->
+     <circle cx="70" cy="120" r="25" fill="#fcfcfc" stroke="#aaa" stroke-width="4"/>
+     <circle cx="70" cy="120" r="10" fill="#111"/>
+     <path d="M70 120 l20 0 A20 20 0 0 1 70 140" fill="#333" opacity="0.5"/>
+     
+     <!-- Reels (Right) -->
+     <circle cx="210" cy="120" r="25" fill="#fcfcfc" stroke="#aaa" stroke-width="4"/>
+     <circle cx="210" cy="120" r="10" fill="#111"/>
+      <path d="M210 120 l20 0 A20 20 0 0 1 210 140" fill="#333" opacity="0.5"/>
+      
+      <!-- Tape Window using path to show "tape" inside -->
+      <rect x="100" y="110" width="80" height="20" rx="2" fill="#111"/>
+  </g>
+
+  <!-- TEXT (Right Side) -->
+  <g transform="translate(300, 110)">
+    <!-- Synthwave Sun/Grid Background behind text (Subtle) -->
+    <circle cx="250" cy="10" r="50" fill="#ff00ff" opacity="0.2" filter="url(#glow)"/>
+    <line x1="100" y1="60" x2="400" y2="60" stroke="#00ffff" stroke-width="2" opacity="0.4" />
+    
+    <!-- Main Title -->
+    <text x="0" y="0" font-family="Impact, sans-serif" font-style="italic" font-size="62" fill="url(#chrome)" stroke="#00ffff" stroke-width="1.5" letter-spacing="2">
+      AUTO-VHS
+    </text>
+    
+    <!-- Subtitle / Deinterlacer -->
+    <text x="5" y="55" font-family="Arial, sans-serif" font-weight="bold" font-style="italic" font-size="42" fill="#fff" stroke="#ff00ff" stroke-width="1" letter-spacing="4" filter="url(#glow)">
+      DEINTERLACER
+    </text>
+  </g>
+</svg>

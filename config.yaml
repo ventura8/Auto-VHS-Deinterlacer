@@ -1,0 +1,106 @@
+# ==============================================================================
+#  AUTO-VHS-DEINTERLACER CONFIGURATION
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# I/O CONFIGURATION
+# ------------------------------------------------------------------------------
+# usage: Define the default source and destination paths for batch operations.
+#        CLI drag-and-drop arguments will override these values.
+input_file: "C:\\Videos\\My_Capture.mp4"
+output_file: "C:\\Videos\\Restored_Master.mp4"
+
+# ------------------------------------------------------------------------------
+# DEBUGGING
+# ------------------------------------------------------------------------------
+# debug_logging:
+#   - false: Standard output (Recommended).
+#   - true:  Detailed terminal logs for troubleshooting.
+debug_logging: false
+
+# ------------------------------------------------------------------------------
+# PROCESSING PIPELINE
+# ------------------------------------------------------------------------------
+# deinterlace_mode: Algorithm selection.
+#   - "QTGMC": Motion-compensated deinterlacer using temporal smoothing.
+#              Current standard for archival preservation of analog sources.
+deinterlace_mode: "QTGMC"
+
+# encoder: Final output codec.
+#   - "prores": Apple ProRes 422 HQ (10-bit). Visually lossless, intra-frame.
+#               Recommended for archival masters and editing. Files will be large.
+#   - "av1":    AOMedia Video 1 (SVT-AV1 / NVENC). High-efficiency distribution format.
+#               Uses hardware acceleration (NVENC) if an NVIDIA GPU is detected.
+encoder: "prores"
+
+# ------------------------------------------------------------------------------
+# VIDEO STANDARDS & SYNC
+# ------------------------------------------------------------------------------
+# tv_standard: Enforce rigid frame rate grid to fix sync drift.
+#   - "auto": Auto-detects based on source (Recommended).
+#   - "ntsc": Force 29.97 fps (USA/Japan).
+#   - "pal":  Force 25.00 fps (Europe/Australia).
+tv_standard: "auto"
+
+# field_order: Interlace field dominance.
+#   - "tff": Top Field First (Standard for 99% of VHS/DVD).
+#   - "bff": Bottom Field First (Rare, e.g. DV-AVI).
+field_order: "tff"
+
+# ------------------------------------------------------------------------------
+# AUDIO SETTINGS
+# ------------------------------------------------------------------------------
+# audio_codec:
+#   - "aac":       Universal compatibility (Default).
+#   - "flac":      Lossless compression. Best for archival.
+#   - "pcm_s24le": Uncompressed 24-bit. Maximum editor compatibility.
+audio_codec: "aac"
+audio_bitrate: "320k"  # Only used for compressed formats (aac/mp3)
+
+# auto_drift_correction: Handles "Audio Stretching" to match video length.
+#   - false: (Recommended Default) Plays audio at natural 100% speed. 
+#            Use this if audio is already synced, or if there is a sudden lag.
+#   - true:  Use ONLY for "Gradual Drift" (e.g., perfect at 0:00, but off by 1:00:00).
+#            This fixes hardware clock mismatches by stretching audio via AI.
+auto_drift_correction: true
+
+# audio_sync_offset: Fixed delay/advance for the entire video.
+#   - 0.0:  No manual shift.
+#   - >0.0: Delays audio (e.g., 0.2 makes audio happen later).
+#   - <0.0: Advances audio (e.g., -0.2 makes audio happen earlier).
+audio_sync_offset: 0.0
+
+# Drift Guard Thresholds (Advanced)
+# Controls the "Best Drift Algorithm" safety checks.
+drift_guard_thresholds:
+  max_drift_percent: 1.5   # Cap for valid drift (Guard against padding/static)
+  min_drift_seconds: 0.010 # Floor for correction (Correct anything > 10ms)
+
+# ------------------------------------------------------------------------------
+# QTGMC PARAMETERS
+# ------------------------------------------------------------------------------
+# Configuration for the QTGMC filter chain.
+# "Very Slow" preset provides the optimal balance of vector analysis accuracy.
+qtgmc_settings:
+  Preset: "Very Slow"  # Options: Slower, Very Slow, Placebo (diminishing returns)
+  SourceMatch: 3       # Refines motion vectors effectively using the source clip (1-3)
+  Lossless: 2          # Source matching mode (0-2). 2 preserves original fields.
+  EZDenoise: 0.0       # Spatial/Temporal denoising level (0.0 - 5.0).
+                       # 0.0 = Bypass (Pure Deinterlace)
+                       # 1.5 = Light noise reduction for typical VHS grain
+  NoiseProcess: 0      # Noise processing mode. 0=Bypass, 1=Denoise, 2=Denoise+Stabilize
+  Sharpness: 0.0       # Detail enhancement (0.0 - 1.5).
+                       # 0.0 = Natural sharpness. Higher values can introduce halos.
+
+# ------------------------------------------------------------------------------
+# HARDWARE OPTIMIZATION
+# ------------------------------------------------------------------------------
+# performance_profile: Resource allocation strategy.
+#   - "auto":  Dynamically scales threads and enables GPU acceleration (OpenCL/NVENC) 
+#              if an NVIDIA GPU is detected.
+#   - "manual": Forces the static configuration defined in 'manual_settings'.
+performance_profile: "auto"
+
+# manual_settings: Override parameters for specific hardware control.
+manual_settings:
+  cpu_threads: 32     # Thread count for FFmpeg/VapourSynth concurrency.
