@@ -1,0 +1,78 @@
+name: Studio Quality CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  quality:
+    name: Static Quality Verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ci-requirements.txt
+      - name: Run Flake8
+        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+      - name: Run Mypy
+        run: mypy auto_deinterlancer.py --ignore-missing-imports
+
+  test:
+    name: Automated Pipeline Validation
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ci-requirements.txt
+      - name: Create Mock Environment
+        run: |
+          # Create mock directories/files that the script expects
+          mkdir -p input
+          touch input/test_video.mp4
+      - name: Run Tests
+        run: |
+          export PYTHONPATH=$PYTHONPATH:.
+          pytest --cov=auto_deinterlancer --cov-report=xml --cov-fail-under=90 --cov-branch tests/
+      
+      - name: Upload Coverage Artifact
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 1
+
+      - name: Generate Job Summary
+        if: success()
+        run: |
+          python .github/scripts/generate_coverage_summary.py coverage.xml >> $GITHUB_STEP_SUMMARY
+
+  reporting:
+    name: Analytics & Coverage Reporting
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Coverage Results
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-report
+          path: ./
+        continue-on-error: true
+      - name: Report Status
+        run: echo "CI Pipeline Complete. Check test results and coverage."

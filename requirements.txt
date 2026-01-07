@@ -1,0 +1,8 @@
+vapoursynth>=66
+pyyaml
+flake8
+black
+pytest
+pytest-cov
+coverage
+coverage-badge
