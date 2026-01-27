@@ -365,9 +365,10 @@ def get_cpu_name():
 
 def get_gpu_name():
     try:
-        output = subprocess.check_output("nvidia-smi -L", shell=True).decode()
+        output = subprocess.check_output("nvidia-smi -L", shell=True).decode().strip()
         if "NVIDIA" in output:
-            return output.split(":")[1].split("(")[0].strip()
+            first_gpu = output.split('\n')[0]
+            return first_gpu.split(":")[1].split("(")[0].strip()
     except Exception:
         pass
     return "Generic / Not Detected"

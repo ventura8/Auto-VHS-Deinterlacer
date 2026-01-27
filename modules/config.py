@@ -85,22 +85,37 @@ def _detect_ram_settings(settings):
 
 
 def _detect_gpu_settings(settings):
-    """Detects GPU presence and updates acceleration settings."""
+    """Detects GPU presence and updates acceleration settings, prioritizing NVIDIA."""
     if shutil.which("nvidia-smi"):
         try:
-            gpu_info = subprocess.check_output("nvidia-smi -L", shell=True).decode().strip()
-            log_info(f"  > GPU Found: {gpu_info.split(':')[0]}")
-            if "NVIDIA" in gpu_info:
+            # -L lists GPUs. We want to find the index of the first NVIDIA card.
+            gpu_list = subprocess.check_output("nvidia-smi -L", shell=True).decode().strip().split('\n')
+            nvidia_index = -1
+            gpu_name = "NVIDIA"
+            
+            for i, line in enumerate(gpu_list):
+                if "NVIDIA" in line:
+                    nvidia_index = i
+                    gpu_name = line.split(":")[1].split("(")[0].strip()
+                    break
+            
+            if nvidia_index != -1:
+                log_info(f"  > NVIDIA GPU Found (Index {nvidia_index}): {gpu_name}")
                 settings["use_gpu_opencl"] = True
+                settings["gpu_device_index"] = nvidia_index
                 if ENCODER == "av1":
                     log_info("  > GPU Acceleration: ENABLED (OpenCL + NVENC)")
                 else:
                     log_info("  > GPU Acceleration: ENABLED (OpenCL for QTGMC)")
                     log_info("    [NOTE] Encoder is set to CPU-bound profile (ProRes).")
                     log_info("    Real-time speed may be limited by CPU.")
-                    log_info("           To use RTX 5090 NVENC, set 'encoder: av1' in config.yaml.")
+                    log_info("           To use NVIDIA NVENC, set 'encoder: av1' in config.yaml.")
+                return
         except Exception:
             pass
+    
+    # Fallback if no NVIDIA or smi fails
+    settings["gpu_device_index"] = 0
 
 
 # HARDWARE DETECTION & OPTIMIZATION
@@ -112,6 +127,7 @@ def detect_hardware_settings():
         "cpu_threads": os.cpu_count() or 16,
         "ram_cache_mb": 4000,  # Default safe value for low-RAM systems
         "use_gpu_opencl": True,  # Optimistic: Default to Hardware Acceleration
+        "gpu_device_index": 0,    # Default device index
     }
 
     if PERF_PROFILE == "manual":

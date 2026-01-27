@@ -57,13 +57,17 @@ def test_get_vpy_info():
 
 
 def test_detect_hardware_logic():
-    """Test hardware detection profiles."""
+    """Test hardware detection profiles and NVIDIA prioritization."""
     from modules.config import detect_hardware_settings
     with patch('os.cpu_count', return_value=12):
         with patch('shutil.which', return_value="/bin/nvidia-smi"):
-            with patch('subprocess.check_output', return_value=b"NVIDIA"):
+            # Mock Multiple GPUs: 0: Intel, 1: NVIDIA
+            gpu_list = b"GPU 0: Intel(R) UHD Graphics\nGPU 1: NVIDIA GeForce RTX 3080"
+            with patch('subprocess.check_output', return_value=gpu_list):
                 settings = detect_hardware_settings()
                 assert settings["cpu_threads"] == 12
+                assert settings["use_gpu_opencl"] is True
+                assert settings["gpu_device_index"] == 1  # Should prioritize NVIDIA at index 1
 
     # Robust Mock for ctypes Memory Status
     mock_ctypes = MagicMock()
@@ -85,11 +89,12 @@ def test_detect_hardware_logic():
         with patch('ctypes.byref', side_effect=lambda x: x):
             with patch('os.cpu_count', return_value=32):
                 with patch('shutil.which', return_value="/bin/nvidia-smi"):
-                    with patch('subprocess.check_output', return_value=b"NVIDIA RTX 5090"):
+                    with patch('subprocess.check_output', return_value=b"GPU 0: NVIDIA RTX 5090"):
                         settings = detect_hardware_settings()
                         # 64GB * 0.5 * 1024 = 32768
                         assert settings["ram_cache_mb"] == 32768
                         assert settings["use_gpu_opencl"] is True
+                        assert settings["gpu_device_index"] == 0
 
             # Test Mid-Range RAM (32GB -> 35% Cache)
             def mock_GlobalMemoryStatusEx_32(ref):
@@ -104,6 +109,8 @@ def test_detect_hardware_logic():
                         # 32GB * 0.35 * 1024 = 11468.8 -> 11468
                         assert abs(settings["ram_cache_mb"] - 11468) <= 1
                         assert settings["ram_cache_mb"] > 0
+                        # Defaults to 0 since nvidia-smi not found
+                        assert settings["gpu_device_index"] == 0
 
             # Test fallback/exception path
             mock_kernel32.GlobalMemoryStatusEx.side_effect = Exception("Ctypes Error")

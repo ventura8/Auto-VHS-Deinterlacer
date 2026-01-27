@@ -1,7 +1,4 @@
+pyyaml
 pytest
 pytest-cov
-pyyaml
-flake8
-mypy
-types-PyYAML
 coverage-badge

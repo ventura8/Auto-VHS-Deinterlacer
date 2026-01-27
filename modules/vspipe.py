@@ -129,7 +129,8 @@ def create_vpy_script(input_file, output_script, mode, override_settings=None):
         "Sharpness": qtgmc_params.get("Sharpness", 0.0), "FPSDivisor": 1,
     }
     if current_settings["use_gpu_opencl"]:
-        qtgmc_args["EdiMode"] = "NNEDI3CL"
+        qtgmc_args["opencl"] = True
+        qtgmc_args["device"] = current_settings.get("gpu_device_index", 0)
 
     lines.append("clip = haf.QTGMC(clip, **" + str(qtgmc_args) + ")")
     lines.append("clip.set_output()")

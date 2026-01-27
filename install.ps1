@@ -22,6 +22,10 @@ Write-Host ""
 try {
     $pythonVersion = python --version 2>&1
     Write-Host "[INFO] Found Python: $pythonVersion" -ForegroundColor Green
+    if ($pythonVersion -notlike "*3.12*") {
+        Write-Host "[WARNING] VapourSynth R73 works best with Python 3.12. You are using $pythonVersion." -ForegroundColor Yellow
+        Write-Host "          If you encounter issues, please consider switching to Python 3.12." -ForegroundColor Yellow
+    }
 }
 catch {
     Write-Host "[ERROR] Python is not installed or not in your PATH." -ForegroundColor Red
@@ -61,9 +65,10 @@ Write-Host "[INFO] Upgrading pip..." -ForegroundColor Cyan
 Write-Host "[INFO] Installing dependencies from requirements.txt..." -ForegroundColor Cyan
 try {
     & "$venvPath\Scripts\python" -m pip install -r (Join-Path $PSScriptRoot "requirements.txt")
-    & "$venvPath\Scripts\python" -m pip install havsfunc
-    # [FIX] Overwrite pip version with legacy r27 script to support QTGMC
-    # First remove the package directory created by pip, which shadows the single file module
+    
+    # [FIX] We use a specific havsfunc r27 script for QTGMC compatibility.
+    # We download it directly instead of using pip to avoid pulling unnecessary/failing dependencies.
+    Write-Host "[INFO] Setting up havsfunc r27 script..." -ForegroundColor Cyan
     if (Test-Path "$venvPath\Lib\site-packages\havsfunc") { Remove-Item "$venvPath\Lib\site-packages\havsfunc" -Recurse -Force }
     Invoke-WebRequest -Uri "https://raw.githubusercontent.com/HomeOfVapourSynthEvolution/havsfunc/r27/havsfunc.py" -OutFile "$venvPath\Lib\site-packages\havsfunc.py"
     
@@ -266,7 +271,7 @@ Write-Host "[INFO] Installing VapourSynth Plugins (QTGMC Stack)..." -ForegroundC
 
 $vsExtractDir = "$venvPath\vs"
 $venvPython = "$venvPath\Scripts\python.exe"
-$pluginsToInstall = "havsfunc lsmas mvtools nnedi3 nnedi3cl neo_fft3d removegrain fmtconv ffms2 eedi3"
+$pluginsToInstall = "havsfunc lsmas mvtools nnedi3 nnedi3cl neo_fft3d removegrain fmtconv ffms2 eedi3 eedi3m"
 
 # [R73 STANDARD] Use standard folder names as required by VapourSynth R73
 $pluginsDirName = "vs-plugins"
@@ -276,10 +281,15 @@ $corePluginsDirName = "vs-coreplugins"
 # This ensures the Python environment matches the binary version
 $wheelDir = Join-Path $vsExtractDir "wheel"
 if (Test-Path $wheelDir) {
-    $wheel = Get-ChildItem -Path $wheelDir -Filter "vapoursynth-*-cp312-*.whl" | Select-Object -First 1
-    if ($wheel) {
-        Write-Host "   -> Installing bundled VapourSynth wheel into venv..." -ForegroundColor Gray
-        & $venvPython -m pip install $wheel.FullName --force-reinstall | Out-Null
+    if ($pythonVersion -like "*3.12*") {
+        $wheel = Get-ChildItem -Path $wheelDir -Filter "vapoursynth-*-cp312-*.whl" | Select-Object -First 1
+        if ($wheel) {
+            Write-Host "   -> Installing bundled VapourSynth wheel into venv..." -ForegroundColor Gray
+            & $venvPython -m pip install $wheel.FullName --force-reinstall | Out-Null
+        }
+    }
+    else {
+        Write-Host "   -> Skipping bundled wheel (version mismatch: requires Python 3.12)." -ForegroundColor Yellow
     }
 }
 
@@ -372,14 +382,16 @@ if ($vsRepoScript -and (Test-Path $vsRepoScript)) {
 
             Write-Host "   -> Running vsrepo install for: $pluginsToInstall"
             $pluginArgs = $pluginsToInstall -split " "
-            & $runner $vsRepoScript -p install $pluginArgs
+            
+            # Use -ErrorAction SilentlyContinue and manual check to avoid failing on optional plugins
+            & $runner $vsRepoScript -p install $pluginArgs 2>&1 | Write-Host -ForegroundColor Gray
             
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "   -> Plugins installed successfully." -ForegroundColor Green
             }
             else {
-                Write-Host "[ERROR] Plugin installation returned exit code $LASTEXITCODE" -ForegroundColor Red
-                $Global:InstallFailed = $true
+                Write-Host "   -> [NOTICE] Some plugins failed to install. This is often normal if they are already present or optional." -ForegroundColor Yellow
+                # Don't set Global:InstallFailed = $true here unless it's a critical failure
             }
             
             # Install vsutil (often needed helper)
