@@ -29,6 +29,7 @@ temp_video_only.mov
 temp_video_only.mkv
 *.log
 *.vpy
+auto_vhs_debug.txt
 test_full.vpy
 *.ffindex
 *.lwi

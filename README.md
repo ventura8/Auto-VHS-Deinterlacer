@@ -1,12 +1,13 @@
 # Auto-VHS-Deinterlacer
-<img src="assets/banner.svg" width="100%" alt="Auto-VHS-Deinterlacer Banner">
 
-**Studio-Reference VHS Restoration Pipeline**
+![Auto-VHS-Deinterlacer Banner](assets/banner.svg)
 
-![Top Language](https://img.shields.io/github/languages/top/ventura8/Auto-VHS-Deinterlacer)
-![Coverage](coverage.svg)
+Studio-Reference VHS Restoration Pipeline
 
-Automated deinterlacing and audio synchronization tool for modernizing VHS captures.
+![Coverage](assets/coverage.svg)
+
+Automated deinterlacing and audio synchronization tool for modernizing VHS
+captures.
 
 ## 🛠️ Restoration Pipeline
 
@@ -38,83 +39,104 @@ flowchart TD
 ```
 
 ## ⚡ Hardware Optimization
-This tool automatically detects high-end hardware (e.g., **RTX 5090**, **Ryzen 9950X3D**) to enable **ULTRA** profiles:
-- **CPU**: Automatically scales threads to match your core count (e.g., 32 threads for FFmpeg & VapourSynth).
-- **RAM**: Automatically adjusts cache based on available memory (e.g., **35%** for 32GB systems, **50%** for 64GB+ systems).
+
+This tool automatically detects high-end hardware (for example, RTX 5090 and
+Ryzen 9950X3D) to enable ULTRA profiles.
+
+- CPU: Automatically scales threads to match your core count.
+- RAM: Automatically adjusts cache based on available memory.
 
 ## 🚀 Usage
-1.  **Install** (Once):
-    - Right-click `install.ps1` -> **"Run with PowerShell"**.
-    - This creates a local, self-contained Python environment.
-2.  **Run**:
-    - **Drag & Drop** your video file (or folder) onto `start.bat`.
-    - Or double-click `start.bat` and drop files into the window.
-3.  **Config**:
-    - Edit `config.yaml` to change between `prores` / `av1` or tweak hardware settings.
+
+1. Install once:
+   - Right-click `.\install.ps1` and choose Run with PowerShell.
+   - This creates a local, self-contained Python environment.
+1. Run:
+   - Drag and drop your video file (or folder) onto `start.bat`.
+   - Or double-click `start.bat` and drop files into the window.
+1. Configure:
+   - Edit `config.yaml` to switch between `prores` and `av1`.
 
 ## 📋 Requirements
-- **Windows** (tested on Windows 11)
 
+- Windows (tested on Windows 11)
 
-## **🚀 Why this exists**
+## Why this exists
 
 Capturing VHS is messy.
 
-1. **Deinterlacing is hard:** Standard FFmpeg filters (yadif/bwdif) lose half the temporal resolution or jaggy edges.  
-2. **Audio Sync Drift:** VHS captures often report 30.00fps vs 29.97fps, causing audio to drift seconds apart by the end of the tape.
+1. Deinterlacing is hard: Standard FFmpeg filters like yadif and bwdif lose
+   temporal detail or introduce jagged edges.
+1. Audio sync drift: VHS captures often report 30.00fps vs 29.97fps, causing
+   audio drift by the end of a tape.
 
 This tool solves both automatically.
 
-## **✨ Features**
+## ✨ Features
 
-* **Studio Reference Reliability:** Built on a self-contained, portable Python environment ensuring zero dependency conflicts.
-* **Archival Grade QTGMC:** Uses `Preset="Very Slow"` with `SourceMatch=3` and `Lossless=2`. Defaults to pure deinterlacing (no denoising/sharpening), but configurable in `config.yaml`.
-* **Smart-Drift Correction:** Enabled by default. Uses adaptive thresholding (absolute 10ms + relative 1.5%) to distinguish between true clock skew and container metadata jitter.
-* **Lossless Audio Workflow:** Configurable support for **PCM (24-bit)** alongside AAC and FLAC, ensuring archival-grade, bit-perfect audio preservation.
-* **ISO 8601 Logging:** Comprehensive audit logs with millisecond-precision timestamps and timezone offsets.
-* **Real-Time Progress:** Visual progress bars with **ETA** (Estimated Time Left), current timestamp, and rendering speed.
-* **Zero-Loss Pipeline:** Pipes raw YUV422P10LE video data directly from VapourSynth to FFmpeg.
+- Studio reference reliability with a self-contained local Python environment.
+- Archival-grade QTGMC defaults with configurable settings in `config.yaml`.
+- Smart drift correction with adaptive thresholding.
+- Lossless audio workflow with PCM, AAC, and FLAC options.
+- ISO 8601 logging with millisecond precision and timezone offsets.
+- Real-time progress with ETA, timestamp, and speed.
+- Zero-loss pipeline from VapourSynth to FFmpeg.
 
-## **🛠️ Requirements**
-* **Windows 10/11**
-* **Internet Connection** (For first-time setup only)
-* **Python 3.10+**
+## 🛠️ Development Requirements
 
-### **Development Requirements**
-* **90% Code Coverage**: Mandatory for all contributions. Enforced via CI/CD.
-* **pytest**: Run `run_tests.ps1` to verify changes locally before pushing.
+- Windows 10/11
+- Internet connection for first-time setup
+- Python 3.12
+- Coverage policy:
+  Every Python module and total repo coverage must stay above 90%.
+- Local pipeline:
+  Run `.\run_pipeline_localy.ps1` before pushing.
+- Dependency profiles:
+  Local and CI validation use light dependencies only.
+  Heavy CUDA and VapourSynth packages are reserved for production installs.
 
-## **📦 Installation & Usage**
+## 📦 Installation and Usage
 
-1. **Install (One-Time Setup):**
-   - Right-click `install.ps1` and select **"Run with PowerShell"**.
-   - This script will:
-     - Create a secluded `.venv` environment.
-     - Download and configure a portable VapourSynth R73 build.
-     - Install all required QTGMC plugins automatically via `vsrepo`.
+1. Install one-time setup:
+   - Right-click `.\install.ps1` and choose Run with PowerShell.
+   - The script will:
+     - Create a secluded `.VENV` environment.
+     - Install main runtime dependencies and the `ml-heavy` group.
+     - Install VapourSynth and initialize `.VENV\vs` runtime folders.
+     - Install required QTGMC plugins with `vsrepo`.
      - Generate a `start.bat` launcher.
+1. Run:
+   - Method A: Drag and drop files onto `start.bat`.
+   - Method B: Double-click `start.bat` and drop files into the prompt.
+1. Processing:
+   - The tool initializes, verifies hardware, and starts batch processing.
+   - Outputs are saved beside source files with `_deinterlaced` suffixes.
 
-2. **Run:**
-   - **Method A:** Drag & Drop your video file (or folder of videos) directly onto `start.bat`.
-   - **Method B:** Double-click `start.bat` and drop files into the interactive window.
+## 🧠 Technical Details
 
-3. **Processing:**
-   - The tool will initialize, verify hardware, and begin batch processing.
-   - Outputs are saved in the same folder as the source file with a `_deinterlaced` suffix.
+The script generates a VapourSynth script (`.vpy`) on the fly with defensive
+plugin loading.
 
-## **🧠 Technical Details**
+1. Ingest: Load video via FFMS2.
+1. Processing: Apply QTGMC Placebo and archival settings.
+1. Single-pass processing:
+   - Efficiency: Pipe video directly from VapourSynth to FFmpeg.
+   - Sync: Calculate drift before encoding and apply `atempo` as needed.
+   - Encoding:
+     - ProRes 422 HQ (10-bit) for archival.
+     - Optional AV1 for high-efficiency output.
 
-The script generates a VapourSynth script (`.vpy`) on the fly with defensive plugin loading.
-
-1. **Ingest:** Loads video via FFMS2 (robust indexing).
-2. **Processing:** Applies QTGMC (Placebo/Archival settings).
-3. **Single-Pass Processing:**
-   - **Efficiency:** Pipes video directly from VapourSynth to FFmpeg (`Pipe -> Encode`).
-   - **Sync:** Calculates audio drift *before* encoding begins. Applies `atempo` filters dynamically during the single pass.
-   - **Encoding:**
-     - **ProRes:** Encodes to ProRes 422 HQ (10-bit) for archival.
-     - **AV1:** Optional high-efficiency encoding (configurable).
-
-## **📄 License**
+## 📄 License
 
 MIT
+
+## ✅ Local Quality Gate
+
+Run the full local validation pipeline:
+
+```powershell
+.\run_pipeline_localy.ps1
+```
+
+This validates Ruff, Flake8, Pylint, Markdown linting, tests with coverage,
+coverage threshold enforcement, and regeneration of `assets/coverage.svg`.

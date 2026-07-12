@@ -2,80 +2,102 @@ name: Studio Quality CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: ["main", "master"]
   pull_request:
-    branches: [ main, master ]
+    branches: ["main", "master"]
+
+permissions:
+  contents: read
+
+env:
+  POETRY_VERSION: "2.4.1"
 
 jobs:
-  quality:
-    name: Static Quality Verification
+  quality_pipeline:
+    name: "🔍🧪📊 Unified Quality Pipeline"
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v7.0.0
         with:
-          python-version: '3.11'
-      - name: Install dependencies
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.3.0
+        with:
+          python-version: "3.12.13"
+
+      - name: Install Poetry
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-lint.txt
+          pip install "poetry==${{ env.POETRY_VERSION }}"
+
+      - name: Configure Poetry In-Project Virtualenv
+        run: |
+          poetry config virtualenvs.in-project true
+
+      - name: Sync Poetry Lock File
+        run: |
+          poetry check --lock || poetry lock
+
+      - name: Install Light + Dev Dependencies
+        run: |
+          poetry install -v --only main,dev --no-root
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module -Name PSScriptAnalyzer -Repository PSGallery -Scope CurrentUser -Force -AllowClobber
+      - name: Run PowerShell Lint
+        shell: pwsh
+        run: |
+          Import-Module PSScriptAnalyzer
+          $settingsPath = Join-Path $PWD "tools/psscriptanalyzer.settings.psd1"
+          $scripts = @("install.ps1", "run_pipeline_localy.ps1")
+          $issues = @()
+          foreach ($scriptPath in $scripts) {
+            $issues += Invoke-ScriptAnalyzer -Path $scriptPath -Settings $settingsPath
+          }
+          if ($issues.Count -gt 0) {
+            $issues | Select-Object RuleName, Severity, ScriptName, Line, Message | Format-Table -AutoSize
+            throw "PowerShell lint failed with $($issues.Count) issue(s)."
+          }
+      - name: Run Ruff
+        run: |
+          poetry run ruff check auto_deinterlancer.py modules tests .github/scripts
       - name: Run Flake8
-        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-      - name: Run Mypy
-        run: mypy auto_deinterlancer.py --ignore-missing-imports
-      - name: Run Radon
         run: |
-          radon cc . -a -nc
-          radon mi . -nc
-  test:
-    name: Automated Pipeline Validation
-    needs: quality
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install dependencies
+          poetry run flake8 auto_deinterlancer.py modules tests .github/scripts
+      - name: Run Pylint
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-test.txt
+          poetry run pylint auto_deinterlancer.py modules .github/scripts
+
+      - name: Run Markdown Auto-Delint
+        run: |
+          poetry run mdformat .
+
+      - name: Run Markdown Lint
+        run: |
+          poetry run pymarkdown scan .
+
       - name: Create Mock Environment
         run: |
-          # Create mock directories/files that the script expects
           mkdir -p input
           touch input/test_video.mp4
-      - name: Run Tests
-        run: |
-          export PYTHONPATH=$PYTHONPATH:.
-          pytest --cov=auto_deinterlancer --cov-report=xml --cov-fail-under=90 --cov-branch tests/
-      
-      - name: Upload Coverage Artifact
-        uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: coverage-report
-          path: coverage.xml
-          retention-days: 1
 
-      - name: Generate Job Summary
-        if: success()
+      - name: Run Tests with Coverage
+        env:
+          AUTO_VHS_SKIP_HW_DETECT: "1"
         run: |
-          python .github/scripts/generate_coverage_summary.py coverage.xml >> $GITHUB_STEP_SUMMARY
+          mkdir -p assets
+          poetry run pytest --cov=modules --cov=auto_deinterlancer --cov-branch --cov-report=xml:assets/coverage.xml --cov-report=term --cov-fail-under=90 tests/
 
-  reporting:
-    name: Analytics & Coverage Reporting
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Download Coverage Results
-        uses: actions/download-artifact@v4
-        with:
-          name: coverage-report
-          path: ./
-        continue-on-error: true
-      - name: Report Status
-        run: echo "CI Pipeline Complete. Check test results and coverage."
+      - name: Enforce Per-File Coverage >= 90%
+        run: |
+          poetry run python .github/scripts/enforce_per_file_coverage.py assets/coverage.xml 90
+
+      - name: Generate Coverage Summary
+        run: |
+          poetry run python .github/scripts/generate_coverage_summary.py assets/coverage.xml > assets/coverage_summary.md
+          cat assets/coverage_summary.md >> $GITHUB_STEP_SUMMARY

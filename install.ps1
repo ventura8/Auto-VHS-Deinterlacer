@@ -1,35 +1,122 @@
-$ErrorActionPreference = "Stop"
-$Global:InstallFailed = $false
+﻿$ErrorActionPreference = "Stop"
+$InstallFailed = $false
+
+function Initialize-VsRepo7Zip {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$VenvPath
+    )
+
+    $vsRepoPackageDir = Join-Path $VenvPath "Lib\site-packages\vsrepo"
+    if (-not (Test-Path $vsRepoPackageDir)) {
+        return $false
+    }
+
+    $local7ZipPath = Join-Path $vsRepoPackageDir "7z.exe"
+    if (Test-Path $local7ZipPath) {
+        return $true
+    }
+
+    $path7ZipCommand = Get-Command "7z.exe" -ErrorAction SilentlyContinue
+    if ($path7ZipCommand -and (Test-Path $path7ZipCommand.Source)) {
+        Copy-Item -Path $path7ZipCommand.Source -Destination $local7ZipPath -Force
+        Write-Output "   -> Reusing system 7z.exe for vsrepo extraction."
+        return $true
+    }
+
+    $sevenZipUrl = "https://www.7-zip.org/a/7za920.zip"
+    $tempRoot = Join-Path $env:TEMP ("auto-vhs-7zip-" + [guid]::NewGuid().ToString("N"))
+    $tempZipPath = Join-Path $tempRoot "7za920.zip"
+    $tempExtractPath = Join-Path $tempRoot "extract"
+
+    try {
+        Write-Output "   -> 7z.exe not found. Bootstrapping standalone 7-Zip..."
+        New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+        Invoke-WebRequest -Uri $sevenZipUrl -OutFile $tempZipPath
+        Expand-Archive -Path $tempZipPath -DestinationPath $tempExtractPath -Force
+
+        $standalone7Zip = Join-Path $tempExtractPath "7za.exe"
+        if (-not (Test-Path $standalone7Zip)) {
+            throw "7za.exe not found in downloaded archive."
+        }
+
+        Copy-Item -Path $standalone7Zip -Destination $local7ZipPath -Force
+        Write-Output "   -> Bootstrapped 7z.exe for vsrepo extraction."
+        return $true
+    }
+    catch {
+        Write-Output "   -> [NOTICE] Could not bootstrap 7-Zip automatically: $_"
+        return $false
+    }
+    finally {
+        if (Test-Path $tempRoot) {
+            Remove-Item -Path $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
 
 # ==============================================================================
 #  Auto-VHS-Deinterlacer Installer
 # ==============================================================================
 #  Author: Auto-VHS Team
-#  Description: 
+#  Description:
 #    Automated installer for the Auto-VHS-Deinterlacer environment.
-#    Sets up Python Virtual Environment, FFmpeg, and VapourSynth R73 Portable.
+#    Sets up Python Virtual Environment, FFmpeg, and VapourSynth runtime tooling.
 #    Handles complex dependency resolution including VapourSynth plugins (QTGMC stack).
 # ==============================================================================
 
-Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "  Auto-VHS-Deinterlacer Installer" -ForegroundColor Cyan
-Write-Host "=================================================="
-Write-Host ""
+Write-Output "=================================================="
+Write-Output "  Auto-VHS-Deinterlacer Installer"
+Write-Output "=================================================="
+Write-Output ""
 
 # ==============================================================================
 # 1. Check for Python Availability
 # ==============================================================================
 try {
-    $pythonVersion = python --version 2>&1
-    Write-Host "[INFO] Found Python: $pythonVersion" -ForegroundColor Green
-    if ($pythonVersion -notlike "*3.12*") {
-        Write-Host "[WARNING] VapourSynth R73 works best with Python 3.12. You are using $pythonVersion." -ForegroundColor Yellow
-        Write-Host "          If you encounter issues, please consider switching to Python 3.12." -ForegroundColor Yellow
+    $pythonLauncherVersion = $null
+    $pythonCommand = $null
+    try {
+        $pythonLauncherVersion = py -3.12 --version 2>&1
     }
+    catch {
+        $pythonLauncherVersion = $null
+    }
+
+    if ($LASTEXITCODE -eq 0 -and $pythonLauncherVersion) {
+        $pythonVersion = $pythonLauncherVersion
+        $pythonCommand = @("py", "-3.12")
+    }
+    else {
+        $pythonVersion = python --version 2>&1
+        $pythonCommand = @("python")
+
+        if (-not ([regex]::IsMatch($pythonVersion, "Python\s+3\.12\.\d+"))) {
+            $python312Candidate = Join-Path $env:LocalAppData "Programs\Python\Python312\python.exe"
+            if (Test-Path $python312Candidate) {
+                $pythonVersion = & $python312Candidate --version 2>&1
+                if ([regex]::IsMatch($pythonVersion, "Python\s+3\.12\.\d+")) {
+                    $pythonCommand = @($python312Candidate)
+                }
+            }
+        }
+    }
+
+    Write-Output "[INFO] Found Python: $pythonVersion"
+    $pythonVersionMatch = [regex]::Match($pythonVersion, "Python\s+(3\.12\.\d+)")
+    if (-not $pythonVersionMatch.Success) {
+        Write-Output "[ERROR] Python 3.12 is required. Found: $pythonVersion"
+        Write-Output "Install Python 3.12, then rerun install.ps1."
+        Write-Output "Tip: If Python 3.12 is installed, run this script with: py -3.12 .\install.ps1"
+        Pause
+        Exit 1
+    }
+
+    $pythonAbiTag = "cp312"
 }
 catch {
-    Write-Host "[ERROR] Python is not installed or not in your PATH." -ForegroundColor Red
-    Write-Host "Please install Python 3.10+ and try again."
+    Write-Output "[ERROR] Python is not installed or not in your PATH."
+    Write-Output "Please install Python 3.12 and try again."
     Pause
     Exit 1
 }
@@ -39,15 +126,50 @@ catch {
 # ==============================================================================
 $venvPath = Join-Path $PSScriptRoot ".venv"
 if (Test-Path $venvPath) {
-    Write-Host "[.venv] Virtual environment already exists. Skipping creation." -ForegroundColor Yellow
+    $existingVenvPython = Join-Path $venvPath "Scripts\python.exe"
+    $existingVenvVersion = $null
+    if (Test-Path $existingVenvPython) {
+        try {
+            $existingVenvVersion = & $existingVenvPython --version 2>&1
+        }
+        catch {
+            $existingVenvVersion = $null
+        }
+    }
+
+    if ($existingVenvVersion -and $existingVenvVersion -match "Python\s+3\.12\.") {
+        Write-Output "[.venv] Python 3.12 virtual environment already exists. Skipping creation."
+    }
+    else {
+        Write-Output "[INFO] Existing .venv is not Python 3.12. Recreating virtual environment..."
+        try {
+            Remove-Item -Path $venvPath -Recurse -Force
+            if ($pythonCommand.Count -eq 2) {
+                & $pythonCommand[0] $pythonCommand[1] -m venv $venvPath
+            }
+            else {
+                & $pythonCommand[0] -m venv $venvPath
+            }
+        }
+        catch {
+            Write-Output "[ERROR] Failed to recreate virtual environment."
+            Pause
+            Exit 1
+        }
+    }
 }
 else {
-    Write-Host "[INFO] Creating Python Virtual Environment in .venv..." -ForegroundColor Cyan
+    Write-Output "[INFO] Creating Python Virtual Environment in .venv..."
     try {
-        python -m venv $venvPath
+        if ($pythonCommand.Count -eq 2) {
+            & $pythonCommand[0] $pythonCommand[1] -m venv $venvPath
+        }
+        else {
+            & $pythonCommand[0] -m venv $venvPath
+        }
     }
     catch {
-        Write-Host "[ERROR] Failed to create virtual environment." -ForegroundColor Red
+        Write-Output "[ERROR] Failed to create virtual environment."
         Pause
         Exit 1
     }
@@ -56,44 +178,54 @@ else {
 # ==============================================================================
 # 3. Upgrade pip
 # ==============================================================================
-Write-Host "[INFO] Upgrading pip..." -ForegroundColor Cyan
+Write-Output "[INFO] Upgrading pip..."
 & "$venvPath\Scripts\python" -m pip install --upgrade pip
+
+# ==============================================================================
+# 3.5 Install Poetry
+# ==============================================================================
+Write-Output "[INFO] Installing Poetry in .venv..."
+& "$venvPath\Scripts\python" -m pip install poetry==2.4.1
 
 # ==============================================================================
 # 4. Install Python Dependencies
 # ==============================================================================
-Write-Host "[INFO] Installing dependencies from requirements.txt..." -ForegroundColor Cyan
+Write-Output "[INFO] Installing runtime dependencies from pyproject.toml..."
 try {
-    & "$venvPath\Scripts\python" -m pip install -r (Join-Path $PSScriptRoot "requirements.txt")
-    
-    # [FIX] We use a specific havsfunc r27 script for QTGMC compatibility.
+    & "$venvPath\Scripts\python" -m poetry config --local virtualenvs.in-project true
+    & "$venvPath\Scripts\python" -m poetry config --local virtualenvs.create false
+    & "$venvPath\Scripts\python" -m poetry -v install --only main,ml-heavy
+    if ($LASTEXITCODE -ne 0) {
+        throw "Poetry install failed with exit code $LASTEXITCODE"
+    }
+
+    # [FIX] We use a specific havsfunc r33 script for QTGMC compatibility.
     # We download it directly instead of using pip to avoid pulling unnecessary/failing dependencies.
-    Write-Host "[INFO] Setting up havsfunc r27 script..." -ForegroundColor Cyan
+    Write-Output "[INFO] Setting up havsfunc r33 script..."
     if (Test-Path "$venvPath\Lib\site-packages\havsfunc") { Remove-Item "$venvPath\Lib\site-packages\havsfunc" -Recurse -Force }
-    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/HomeOfVapourSynthEvolution/havsfunc/r27/havsfunc.py" -OutFile "$venvPath\Lib\site-packages\havsfunc.py"
-    
-    # [FIX] Patch havsfunc for VapourSynth R73 API compatibility
-    # The r27 script uses vs.get_core() which is deprecated
-    $patchScript = Join-Path $PSScriptRoot "patch_havsfunc.py"
+    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/HomeOfVapourSynthEvolution/havsfunc/r33/havsfunc.py" -OutFile "$venvPath\Lib\site-packages\havsfunc.py"
+
+    # [FIX] Patch havsfunc for VapourSynth API compatibility
+    # The r33 script uses vs.get_core() which is deprecated
+    $patchScript = Join-Path $PSScriptRoot "modules\core\patch_havsfunc.py"
     if (Test-Path $patchScript) {
-        Write-Host "   -> Patching havsfunc for R73 compatibility..." -ForegroundColor Gray
+        Write-Output "   -> Patching havsfunc compatibility..."
         & "$venvPath\Scripts\python" $patchScript
     }
 }
 catch {
-    Write-Host "[ERROR] Failed to install dependencies." -ForegroundColor Red
-    $Global:InstallFailed = $true
+    Write-Output "[ERROR] Failed to install dependencies."
+    $InstallFailed = $true
 }
 
-Write-Host ""
-Write-Host "==================================================" -ForegroundColor Cyan
-
+Write-Output ""
+Write-Output "=================================================="
 # ==============================================================================
 # 5. Install Local FFmpeg (Self-Contained)
 # ==============================================================================
 $ffmpegDest = "$venvPath\Scripts\ffmpeg.exe"
 if (-not (Test-Path $ffmpegDest)) {
-    Write-Host "[INFO] FFmpeg not found in .venv. Downloading typical static build..." -ForegroundColor Cyan
+    Write-Output "[INFO] FFmpeg not found in .venv. Downloading typical static build..."
     $ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
     $zipPath = Join-Path $PSScriptRoot "ffmpeg.zip"
     $extractPath = Join-Path $PSScriptRoot "ffmpeg_temp"
@@ -101,24 +233,24 @@ if (-not (Test-Path $ffmpegDest)) {
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         Invoke-WebRequest -Uri $ffmpegUrl -OutFile $zipPath -UseBasicParsing
-        
-        Write-Host "   -> Extracting..."
+
+        Write-Output "   -> Extracting..."
         Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
-        
+
         $binPath = Get-ChildItem -Path $extractPath -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
         if ($binPath) {
             $sourceDir = $binPath.DirectoryName
             Copy-Item -Path "$sourceDir\ffmpeg.exe" -Destination "$venvPath\Scripts\" -Force
             Copy-Item -Path "$sourceDir\ffprobe.exe" -Destination "$venvPath\Scripts\" -Force
-            Write-Host "   -> FFmpeg installed to .venv/Scripts/ (Self-Contained)" -ForegroundColor Green
+            Write-Output "   -> FFmpeg installed to .venv/Scripts/ (Self-Contained)"
         }
         else {
             throw "Could not find ffmpeg.exe in extracted archive."
         }
     }
     catch {
-        Write-Host "[WARNING] Failed to auto-install FFmpeg: $_" -ForegroundColor Yellow
-        Write-Host "The app will rely on system-wide FFmpeg instead."
+        Write-Output "[WARNING] Failed to auto-install FFmpeg: $_"
+        Write-Output "The app will rely on system-wide FFmpeg instead."
     }
     finally {
         if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
@@ -126,171 +258,173 @@ if (-not (Test-Path $ffmpegDest)) {
     }
 }
 else {
-    Write-Host "[INFO] Local FFmpeg already installed." -ForegroundColor Green
+    Write-Output "[INFO] Local FFmpeg already installed."
 }
 
-Write-Host ""
-Write-Host "==================================================" -ForegroundColor Cyan
-
+Write-Output ""
+Write-Output "=================================================="
 # ==============================================================================
-# 6. Install VapourSynth Portable (R73 / Self-Contained)
+# 6. Initialize VapourSynth Runtime (pip / Self-Contained)
 # ==============================================================================
-# Note: R73 structure requires special handling for DLLs within wheels.
-# It uses 'vs-plugins' and 'vs-coreplugins' directories.
+# We avoid downloading portable ZIP bundles and instead rely on the pip package.
+# The local .venv\vs folder is kept for plugin isolation and deterministic runtime paths.
 # ==============================================================================
-$vsDest = "$venvPath\vs\vspipe.exe"
-if (-not (Test-Path $vsDest)) {
-    Write-Host "[INFO] VapourSynth not found. Downloading Portable build..." -ForegroundColor Cyan
-    $vsUrl = "https://github.com/vapoursynth/vapoursynth/releases/download/R73/VapourSynth64-Portable-R73.zip"
-    
-    $vsZip = Join-Path $PSScriptRoot "vs.zip"
-    $vsExtractDir = "$venvPath\vs"
+$vsExtractDir = "$venvPath\vs"
+if (-not (Test-Path $vsExtractDir)) {
+    New-Item -ItemType Directory -Path $vsExtractDir -Force | Out-Null
+}
 
-    try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        
-        # Download VS
-        Write-Host "   -> Downloading VapourSynth R73..."
-        Invoke-WebRequest -Uri $vsUrl -OutFile $vsZip -UseBasicParsing
-        
-        # [ROBUSTNESS] Folder Rotation Strategy
-        # Rename existing folder instead of direct delete to bypass file locks from zombie processes.
-        if (Test-Path $vsExtractDir) {
-            Get-Process | Where-Object { $_.Modules.FileName -like "*$vsExtractDir*" -or $_.Name -eq "vspipe" } | Stop-Process -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 1
-            $oldDir = "$vsExtractDir`_old_$(Get-Date -Format 'yyyyMMddHHmmss')"
-            try { Rename-Item -Path $vsExtractDir -NewName (Split-Path $oldDir -Leaf) -ErrorAction SilentlyContinue } catch {}
-            if (Test-Path $vsExtractDir) { 
-                # If rename failed, try to delete contents as fallback
-                try { Get-ChildItem -Path $vsExtractDir | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue } catch {}
-            }
-        }
-        if (-not (Test-Path $vsExtractDir)) { New-Item -ItemType Directory -Path $vsExtractDir -Force | Out-Null }
-        
-        # Extract to a temp directory OUTSIDE of .venv/vs to prevent Move-Item nesting issues
-        $tempExtractDir = Join-Path $PSScriptRoot "vs_extract_temp"
-        if (Test-Path $tempExtractDir) { Remove-Item $tempExtractDir -Recurse -Force -ErrorAction SilentlyContinue }
-        New-Item -ItemType Directory -Path $tempExtractDir -Force | Out-Null
-        
-        Write-Host "   -> Extracting VapourSynth archive..."
-        Expand-Archive -Path $vsZip -DestinationPath $tempExtractDir -Force
-        
-        # Handle potential subfolder structure in zip
-        $contentPath = $tempExtractDir
-        $subFolder = Get-ChildItem -Path $tempExtractDir -Directory | Where-Object { Test-Path (Join-Path $_.FullName "vspipe.exe") } | Select-Object -First 1
-        if ($subFolder) {
-            $contentPath = $subFolder.FullName
-            Write-Host "   -> Found subfolder structure: $($subFolder.Name)"
-        }
-        
-        Write-Host "   -> Relocating files to vs root..."
-        Get-ChildItem -Path $contentPath | ForEach-Object {
-            try {
-                Move-Item -Path $_.FullName -Destination $vsExtractDir -Force -ErrorAction Stop
-            }
-            catch {
-                Write-Host "      [WARNING] Could not move $($_.Name): $($_.Exception.Message)" -ForegroundColor Yellow
-            }
-        }
-        
-        # Cleanup temp extraction folder
-        if ($null -ne $tempExtractDir -and (Test-Path $tempExtractDir)) {
-            Remove-Item $tempExtractDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        # Cleanup rotated old dir if it exists
-        if ($null -ne (Get-Variable -Name "oldDir" -ErrorAction SilentlyContinue)) {
-            if (Test-Path $oldDir) {
-                Remove-Item $oldDir -Recurse -Force -ErrorAction SilentlyContinue
-            }
-        }
-
-        # [CLEANUP] DLL extraction logic removed as we use Python Pipe now.
-        # The bundled vspipe.exe is ignored in favor of 'vspipe_native.py'.
-
-        # Final check for DLL presence
-        if (-not (Test-Path "$vsExtractDir\vapoursynth.dll")) {
-            Write-Host "   -> Searching recursively for missing vapoursynth.dll..."
-            $foundDll = Get-ChildItem -Path $vsExtractDir -Recurse -Filter "vapoursynth.dll" | Select-Object -First 1
-            if ($foundDll) {
-                Copy-Item $foundDll.FullName -Destination $vsExtractDir -Force
-            }
-        }
-
-        # [PORTABLE MODE] Create portable.vs to enable portable mode
-        if (-not (Test-Path "$vsExtractDir\portable.vs")) {
-            New-Item -Path "$vsExtractDir\portable.vs" -ItemType File -Force | Out-Null
-        }
-
-        if (Test-Path "$vsExtractDir\vspipe.exe") {
-            Write-Host "   -> VapourSynth installed to .venv/vs/ (Self-Contained)" -ForegroundColor Green
-            
-            # [PERFORMANCE FIX] Download Python 3.12 embeddable to enable vspipe.exe
-            # The bundled VSScriptPython38.dll needs Python DLLs in the same directory
-            Write-Host "   -> Downloading Python 3.12 embeddable for vspipe.exe..." -ForegroundColor Gray
-            $pythonEmbedUrl = "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip"
-            $pythonEmbedZip = Join-Path $PSScriptRoot "python_embed.zip"
-            try {
-                Invoke-WebRequest -Uri $pythonEmbedUrl -OutFile $pythonEmbedZip -UseBasicParsing
-                Expand-Archive -Path $pythonEmbedZip -DestinationPath $vsExtractDir -Force
-                
-                # [CRITICAL] Disable isolated mode by renaming the _pth file
-                # This allows PYTHONHOME and PYTHONPATH to take effect
-                $pthFile = Join-Path $vsExtractDir "python312._pth"
-                if (Test-Path $pthFile) {
-                    Rename-Item -Path $pthFile -NewName "python312._pth.disabled" -Force
-                    Write-Host "      -> Disabled python312._pth isolation mode" -ForegroundColor Gray
-                }
-                Write-Host "      -> Python 3.12 embeddable installed for vspipe.exe" -ForegroundColor Green
-            }
-            catch {
-                Write-Host "      [WARNING] Failed to download Python embeddable: $_" -ForegroundColor Yellow
-            }
-            finally {
-                if (Test-Path $pythonEmbedZip) { Remove-Item $pythonEmbedZip -Force }
-            }
-        }
-        else {
-            throw "Extraction failed. vspipe.exe not found."
-        }
-    }
-    catch {
-        Write-Host "[WARNING] Failed to auto-install VapourSynth: $_" -ForegroundColor Yellow
-        Write-Host "The app will rely on system-wide VapourSynth instead."
-        $Global:InstallFailed = $true
-    }
-    finally {
-        if (Test-Path $vsZip) { Remove-Item $vsZip -Force }
+# Keep directory layout deterministic for plugin installers and runtime lookups.
+foreach ($dirName in @("vs-plugins", "vs-coreplugins")) {
+    $dirPath = Join-Path $vsExtractDir $dirName
+    if (-not (Test-Path $dirPath)) {
+        New-Item -ItemType Directory -Path $dirPath -Force | Out-Null
     }
 }
+
+if (-not (Test-Path "$vsExtractDir\portable.vs")) {
+    New-Item -Path "$vsExtractDir\portable.vs" -ItemType File -Force | Out-Null
+}
+
+Write-Output "[INFO] Prepared local VapourSynth runtime folder at .venv/vs (pip-backed)."
 
 # ==============================================================================
 # 7. Install VapourSynth Plugins (QTGMC Stack)
 # ==============================================================================
-Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "[INFO] Installing VapourSynth Plugins (QTGMC Stack)..." -ForegroundColor Cyan
-
+Write-Output "=================================================="
+Write-Output "[INFO] Installing VapourSynth Plugins (QTGMC Stack)..."
 $vsExtractDir = "$venvPath\vs"
 $venvPython = "$venvPath\Scripts\python.exe"
 $pluginsToInstall = "havsfunc lsmas mvtools nnedi3 nnedi3cl neo_fft3d removegrain fmtconv ffms2 eedi3 eedi3m"
 
-# [R73 STANDARD] Use standard folder names as required by VapourSynth R73
+# [R77 STANDARD] Use standard folder names as required by VapourSynth
 $pluginsDirName = "vs-plugins"
 $corePluginsDirName = "vs-coreplugins"
+
+# Ensure we have a modern Python package with vspipe.exe available in site-packages.
+try {
+    Write-Output "   -> Ensuring Python vapoursynth package is installed (target: 77)..."
+    & $venvPython -m pip install --upgrade "vapoursynth==77" | Out-Null
+
+    Write-Output "   -> Registering VapourSynth runtime configuration..."
+    & "$venvPath\Scripts\vapoursynth.exe" register-install | Out-Null
+    & "$venvPath\Scripts\vapoursynth.exe" register-legacy-install | Out-Null
+
+    # Force the VSScript -> Python mapping to the active venv and base Python DLL.
+    # This avoids stale entries (e.g. old python313.dll) after Python version migrations.
+    $vsScriptPath = (& "$venvPath\Scripts\vapoursynth.exe" get-vsscript).Trim()
+    $basePythonDll = (& $venvPython -c "import os, sys; c=[os.path.join(sys.base_prefix, f'python{sys.version_info.major}{sys.version_info.minor}.dll'), os.path.join(sys.base_exec_prefix, f'python{sys.version_info.major}{sys.version_info.minor}.dll')]; e=[p for p in c if os.path.exists(p)]; print(e[0] if e else '')").Trim()
+
+    if ($vsScriptPath -and $basePythonDll) {
+        $vsConfigDir = Join-Path $env:APPDATA "vapoursynth"
+        $vsConfigFile = Join-Path $vsConfigDir "vapoursynth.toml"
+        $escapedKey = $vsScriptPath.ToLower().Replace("\", "\\")
+        $escapedExe = $venvPython.Replace("\", "\\")
+        $escapedDll = $basePythonDll.Replace("\", "\\")
+
+        if (-not (Test-Path $vsConfigDir)) {
+            New-Item -ItemType Directory -Path $vsConfigDir -Force | Out-Null
+        }
+
+        $mappingLine = ('"' + $escapedKey + '" = ["' + $escapedExe + '","' + $escapedDll + '"]')
+        $existingConfigLines = @()
+        if (Test-Path $vsConfigFile) {
+            $existingConfigLines = Get-Content -Path $vsConfigFile -ErrorAction SilentlyContinue
+        }
+
+        $escapedKeyRegex = [regex]::Escape($escapedKey)
+        $mergedConfigLines = @()
+        $updatedMapping = $false
+
+        foreach ($line in $existingConfigLines) {
+            if ($line -match ('^\s*"' + $escapedKeyRegex + '"\s*=')) {
+                if (-not $updatedMapping) {
+                    $mergedConfigLines += $mappingLine
+                    $updatedMapping = $true
+                }
+                continue
+            }
+            $mergedConfigLines += $line
+        }
+
+        if (-not $updatedMapping) {
+            if ($mergedConfigLines.Count -gt 0 -and $mergedConfigLines[-1] -ne "") {
+                $mergedConfigLines += ""
+            }
+            $mergedConfigLines += $mappingLine
+        }
+
+        Set-Content -Path $vsConfigFile -Value $mergedConfigLines -Encoding UTF8
+        Write-Output "   -> Wrote VapourSynth Python mapping to $vsConfigFile"
+    }
+    else {
+        Write-Output "   -> [NOTICE] Could not resolve complete VapourSynth Python mapping automatically."
+    }
+}
+catch {
+    Write-Output "[ERROR] Failed to install or register vapoursynth==77 in venv: $_"
+    $InstallFailed = $true
+}
+
+# Install vsrepo separately for newer VapourSynth releases.
+try {
+    Write-Output "   -> Installing vsrepo tool in venv..."
+    & $venvPython -m pip install --upgrade vsrepo | Out-Null
+}
+catch {
+    Write-Output "[ERROR] Failed to install vsrepo in venv: $_"
+    $InstallFailed = $true
+}
+
+# Bootstrap vspipe.exe and required VapourSynth runtime binaries from the pip package.
+$vapoursynthPackageDir = Join-Path $venvPath "Lib\site-packages\vapoursynth"
+if (-not (Test-Path $vsExtractDir)) { New-Item -ItemType Directory -Path $vsExtractDir -Force | Out-Null }
+
+$venvVspipe = Join-Path $vapoursynthPackageDir "vspipe.exe"
+if (Test-Path $venvVspipe) {
+    Copy-Item -Path $venvVspipe -Destination (Join-Path $vsExtractDir "vspipe.exe") -Force
+    Write-Output "   -> Bootstrapped vspipe.exe from venv site-packages."
+}
+else {
+    Write-Output "[WARNING] vspipe.exe not found in venv site-packages after vapoursynth install."
+}
+
+if (Test-Path $vapoursynthPackageDir) {
+    $runtimeFiles = @()
+    foreach ($pattern in @("*.dll", "*.pyd")) {
+        $runtimeFiles += Get-ChildItem -Path $vapoursynthPackageDir -Filter $pattern -File -ErrorAction SilentlyContinue
+    }
+
+    if ($runtimeFiles.Count -gt 0) {
+        foreach ($runtimeFile in $runtimeFiles) {
+            Copy-Item -Path $runtimeFile.FullName -Destination (Join-Path $vsExtractDir $runtimeFile.Name) -Force
+        }
+        Write-Output "   -> Copied $($runtimeFiles.Count) VapourSynth runtime binaries to .venv/vs/."
+    }
+    else {
+        Write-Output "[WARNING] No VapourSynth runtime binaries found in $vapoursynthPackageDir"
+    }
+}
+else {
+    Write-Output "[WARNING] VapourSynth package directory missing: $vapoursynthPackageDir"
+}
 
 # 1. Install Bundled Wheel
 # This ensures the Python environment matches the binary version
 $wheelDir = Join-Path $vsExtractDir "wheel"
 if (Test-Path $wheelDir) {
-    if ($pythonVersion -like "*3.12*") {
-        $wheel = Get-ChildItem -Path $wheelDir -Filter "vapoursynth-*-cp312-*.whl" | Select-Object -First 1
-        if ($wheel) {
-            Write-Host "   -> Installing bundled VapourSynth wheel into venv..." -ForegroundColor Gray
-            & $venvPython -m pip install $wheel.FullName --force-reinstall | Out-Null
-        }
+    $wheel = Get-ChildItem -Path $wheelDir -Filter "vapoursynth-*-$pythonAbiTag-*.whl" | Select-Object -First 1
+    if ($wheel) {
+        Write-Output "   -> Installing bundled VapourSynth wheel into venv..."
+        & $venvPython -m pip install $wheel.FullName --force-reinstall | Out-Null
     }
     else {
-        Write-Host "   -> Skipping bundled wheel (version mismatch: requires Python 3.12)." -ForegroundColor Yellow
+        Write-Output "   -> Bundled wheel for $pythonAbiTag not found. Installing from PyPI..."
+        & $venvPython -m pip install --upgrade "vapoursynth==77" | Out-Null
     }
+}
+else {
+    Write-Output "   -> Portable wheel directory not found. Keeping existing venv VapourSynth package state."
 }
 
 # 2. Sync Portable Markers (Fix for "Autoloading Failed")
@@ -298,10 +432,10 @@ if (Test-Path $wheelDir) {
 # initializes correctly even when mixed with system paths.
 try {
     $sitePkgs = & $venvPython -c "import site; print(site.getsitepackages()[0])"
-    if (Test-Path $sitePkgs) {
-        Write-Host "   -> Syncing portable markers to venv site-packages..." -ForegroundColor Gray
+    if ((Test-Path $sitePkgs) -and (Test-Path $vsExtractDir)) {
+        Write-Output "   -> Syncing portable markers to venv site-packages..."
         Copy-Item (Join-Path $vsExtractDir "portable.vs") -Destination $sitePkgs -Force -ErrorAction SilentlyContinue
-        
+
         $srcCore = Join-Path $vsExtractDir $corePluginsDirName
         if (Test-Path $srcCore) {
             $destCore = Join-Path $sitePkgs $corePluginsDirName
@@ -311,56 +445,59 @@ try {
     }
 }
 catch {
-    Write-Host "[WARNING] Failed to sync portable markers: $_" -ForegroundColor Yellow
+    Write-Output "[WARNING] Failed to sync portable markers: $_"
 }
 
-# Identify plugin runner (prefer portable python if available)
-$pythonExe = $null
-$possiblePythonPaths = @(
-    "$vsExtractDir\python.exe",
-    "$vsExtractDir\Scripts\python.exe",
-    "$vsExtractDir\sdk\python.exe"
-)
-foreach ($path in $possiblePythonPaths) {
-    if (Test-Path $path) { $pythonExe = $path; break }
+# Resolve vsrepo runner (prefer venv console script).
+$vsRepoRunnerType = $null
+$vsRepoRunnerPath = $null
+
+$venvVsRepoExe = Join-Path $venvPath "Scripts\vsrepo.exe"
+if (Test-Path $venvVsRepoExe) {
+    $vsRepoRunnerType = "exe"
+    $vsRepoRunnerPath = $venvVsRepoExe
 }
 
-$vsRepoScript = $null
-$possibleVsRepoPaths = @(
-    "$vsExtractDir\vsrepo.py",
-    "$vsExtractDir\Scripts\vsrepo.py",
-    "$vsExtractDir\sdk\vsrepo.py"
-)
-foreach ($path in $possibleVsRepoPaths) {
-    if (Test-Path $path) { $vsRepoScript = $path; break }
+if (-not $vsRepoRunnerPath) {
+    $venvVsRepoPy = Join-Path $venvPath "Lib\site-packages\vsrepo\vsrepo.py"
+    if (Test-Path $venvVsRepoPy) {
+        $vsRepoRunnerType = "script"
+        $vsRepoRunnerPath = $venvVsRepoPy
+    }
 }
 
-# Fallback searches
-if (-not $pythonExe) {
-    $foundPython = Get-ChildItem -Path $vsExtractDir -Recurse -Filter "python.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($foundPython) { $pythonExe = $foundPython.FullName }
-}
-if (-not $vsRepoScript) {
-    $foundVsRepo = Get-ChildItem -Path $vsExtractDir -Recurse -Filter "vsrepo.py" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($foundVsRepo) { $vsRepoScript = $foundVsRepo.FullName }
+if (-not $vsRepoRunnerPath) {
+    $possibleVsRepoPaths = @(
+        "$vsExtractDir\vsrepo.py",
+        "$vsExtractDir\Scripts\vsrepo.py",
+        "$vsExtractDir\sdk\vsrepo.py"
+    )
+    foreach ($path in $possibleVsRepoPaths) {
+        if (Test-Path $path) {
+            $vsRepoRunnerType = "script"
+            $vsRepoRunnerPath = $path
+            break
+        }
+    }
+    if (-not $vsRepoRunnerPath) {
+        $foundVsRepo = Get-ChildItem -Path $vsExtractDir -Recurse -Filter "vsrepo.py" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($foundVsRepo) {
+            $vsRepoRunnerType = "script"
+            $vsRepoRunnerPath = $foundVsRepo.FullName
+        }
+    }
 }
 
-# Determine Runner
-if ($pythonExe -and (Test-Path $pythonExe)) {
-    Write-Host "   -> Found portable Python: $pythonExe" -ForegroundColor Gray
-    $runner = $pythonExe
-}
-else {
-    Write-Host "[WARNING] Portable Python not found. Using venv Python for plugin install..." -ForegroundColor Yellow
-    $runner = $venvPython
-}
-
-# Run vsrepo to install plugins
-if ($vsRepoScript -and (Test-Path $vsRepoScript)) {
+if ($vsRepoRunnerPath -and (Test-Path $vsRepoRunnerPath)) {
     try {
+        $hasVsRepo7Zip = Initialize-VsRepo7Zip -VenvPath $venvPath
+        if (-not $hasVsRepo7Zip) {
+            Write-Output "   -> [NOTICE] vsrepo may fail for archive-based plugins without 7-Zip."
+        }
+
         $originalLocation = Get-Location
         Set-Location -Path $vsExtractDir
-        
+
         # Ensure directories exist
         foreach ($dir in @($pluginsDirName, $corePluginsDirName)) {
             if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
@@ -369,7 +506,7 @@ if ($vsRepoScript -and (Test-Path $vsRepoScript)) {
         # [ISOLATION] Isolate vsrepo from user's system plugins
         $fakeAppData = Join-Path $vsExtractDir "fake_appdata"
         if (-not (Test-Path $fakeAppData)) { New-Item -ItemType Directory -Path $fakeAppData -Force | Out-Null }
-        
+
         $oldAppData = $env:APPDATA
         $oldLocalAppData = $env:LOCALAPPDATA
         $env:APPDATA = $fakeAppData
@@ -377,49 +514,136 @@ if ($vsRepoScript -and (Test-Path $vsRepoScript)) {
         $env:VAPOURSYNTH_PLUGINS = Join-Path $vsExtractDir $pluginsDirName
 
         try {
-            Write-Host "   -> Updating vsrepo definitions..."
-            & $runner $vsRepoScript -p update
+            $nativeStderrPreferenceWasSet = $false
+            $nativeStderrPreferenceBackup = $false
+            $commandErrorActionPreferenceBackup = $ErrorActionPreference
+            if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
+                $nativeStderrPreferenceWasSet = $true
+                $nativeStderrPreferenceBackup = $PSNativeCommandUseErrorActionPreference
+                $PSNativeCommandUseErrorActionPreference = $false
+            }
 
-            Write-Host "   -> Running vsrepo install for: $pluginsToInstall"
-            $pluginArgs = $pluginsToInstall -split " "
-            
-            # Use -ErrorAction SilentlyContinue and manual check to avoid failing on optional plugins
-            & $runner $vsRepoScript -p install $pluginArgs 2>&1 | Write-Host -ForegroundColor Gray
-            
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "   -> Plugins installed successfully." -ForegroundColor Green
+            # vsrepo writes informative diagnostics to stderr; handle success/failure via exit code checks here.
+            $ErrorActionPreference = "SilentlyContinue"
+
+            Write-Output "   -> Using vsrepo runner: $vsRepoRunnerPath"
+            Write-Output "   -> Updating vsrepo definitions..."
+            $useLegacyVsRepoArgs = $false
+
+            if ($vsRepoRunnerType -eq "exe") {
+                & $vsRepoRunnerPath update
             }
             else {
-                Write-Host "   -> [NOTICE] Some plugins failed to install. This is often normal if they are already present or optional." -ForegroundColor Yellow
-                # Don't set Global:InstallFailed = $true here unless it's a critical failure
+                & $venvPython $vsRepoRunnerPath update
             }
-            
+
+            if ($LASTEXITCODE -ne 0) {
+                Write-Output "   -> [NOTICE] Modern vsrepo CLI call failed; retrying with legacy -p syntax."
+                $useLegacyVsRepoArgs = $true
+                if ($vsRepoRunnerType -eq "exe") {
+                    & $vsRepoRunnerPath -p update
+                }
+                else {
+                    & $venvPython $vsRepoRunnerPath -p update
+                }
+            }
+
+            Write-Output "   -> Running vsrepo install for: $pluginsToInstall"
+            $pluginArgs = $pluginsToInstall -split " "
+            $installOutput = @()
+
+            # Use -ErrorAction SilentlyContinue and manual check to avoid failing on optional plugins
+            if (-not $useLegacyVsRepoArgs) {
+                if ($vsRepoRunnerType -eq "exe") {
+                    $installOutput = & $vsRepoRunnerPath install $pluginArgs 2>&1
+                }
+                else {
+                    $installOutput = & $venvPython $vsRepoRunnerPath install $pluginArgs 2>&1
+                }
+
+                $installOutput | ForEach-Object { Write-Output $_ }
+
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Output "   -> [NOTICE] Modern vsrepo install call failed; retrying with legacy -p syntax."
+                    $useLegacyVsRepoArgs = $true
+                }
+            }
+
+            if ($useLegacyVsRepoArgs) {
+                if ($vsRepoRunnerType -eq "exe") {
+                    $installOutput = & $vsRepoRunnerPath -p install $pluginArgs 2>&1
+                }
+                else {
+                    $installOutput = & $venvPython $vsRepoRunnerPath -p install $pluginArgs 2>&1
+                }
+
+                $installOutput | ForEach-Object { Write-Output $_ }
+            }
+
+            $requiredPluginNamespaces = @("havsfunc", "lsmas", "mv", "nnedi3", "nnedi3cl", "neo_fft3d", "rgvs", "fmtc", "ffms2", "eedi3", "eedi3m")
+            if ($vsRepoRunnerType -eq "exe") {
+                $installedOutputText = (& $vsRepoRunnerPath installed 2>&1 | Out-String)
+            }
+            else {
+                $installedOutputText = (& $venvPython $vsRepoRunnerPath installed 2>&1 | Out-String)
+            }
+
+            $missingRequiredPlugins = @()
+            foreach ($namespace in $requiredPluginNamespaces) {
+                $escapedNamespace = [regex]::Escape($namespace)
+                if ($installedOutputText -notmatch "(?m)\s$escapedNamespace\s") {
+                    $missingRequiredPlugins += $namespace
+                }
+            }
+
+            if ($LASTEXITCODE -eq 0 -or $missingRequiredPlugins.Count -eq 0) {
+                Write-Output "   -> Plugins installed successfully."
+
+                if ($installOutput -match "ZNEDI3") {
+                    Write-Output "   -> [NOTICE] ZNEDI3 download currently fails upstream in vsrepo metadata."
+                    Write-Output "   -> [NOTICE] QTGMC still works because NNEDI3/NNEDI3CL are installed."
+                }
+            }
+            else {
+                Write-Output "   -> [NOTICE] Some required plugins are missing: $($missingRequiredPlugins -join ', ')"
+                Write-Output "   -> [NOTICE] QTGMC may require manual plugin setup."
+            }
+
             # Install vsutil (often needed helper)
-            & $runner -m pip install vsutil | Out-Null
+            & $venvPython -m pip install vsutil | Out-Null
+
+            if ($nativeStderrPreferenceWasSet) {
+                $PSNativeCommandUseErrorActionPreference = $nativeStderrPreferenceBackup
+            }
+            $ErrorActionPreference = $commandErrorActionPreferenceBackup
         }
         finally {
+            if ($nativeStderrPreferenceWasSet) {
+                $PSNativeCommandUseErrorActionPreference = $nativeStderrPreferenceBackup
+            }
+            $ErrorActionPreference = $commandErrorActionPreferenceBackup
             $env:APPDATA = $oldAppData
             $env:LOCALAPPDATA = $oldLocalAppData
             Set-Location -Path $originalLocation
         }
     }
     catch {
-        Write-Host "[ERROR] Failed to install plugins: $_" -ForegroundColor Red
-        $Global:InstallFailed = $true
+        Write-Output "[WARNING] Failed to install plugins automatically: $_"
+        Write-Output "   -> This can be caused by missing extraction tools (e.g. 7z) or unavailable plugin release assets."
+        Write-Output "   -> You can still run the app, but QTGMC may require manual plugin setup."
     }
 }
 else {
-    Write-Host "[ERROR] vsrepo.py script not found. Cannot install plugins." -ForegroundColor Red
-    $Global:InstallFailed = $true
+    Write-Output "[ERROR] vsrepo is not available (no console script or script file found)."
+    $InstallFailed = $true
 }
 
-Write-Host ""
-Write-Host "==================================================" -ForegroundColor Cyan
-
+Write-Output ""
+Write-Output "=================================================="
 # ==============================================================================
 # 8. Generate Launcher (start.bat)
 # ==============================================================================
-Write-Host "Generating launcher: start.bat..." -ForegroundColor Cyan
+Write-Output "Generating launcher: start.bat..."
 $batchContent = @"
 @echo off
 cd /d "%~dp0"
@@ -447,23 +671,24 @@ if %errorlevel% neq 0 (
 "@
 Set-Content -Path "start.bat" -Value $batchContent
 
-if ($Global:InstallFailed) {
-    Write-Host "`n==================================================" -ForegroundColor Red
-    Write-Host "[ERROR] Installation completed with errors." -ForegroundColor Red
-    Write-Host "Some components may not be working correctly." -ForegroundColor Red
-    Write-Host "Check the logs above for red [ERROR] and orange [WARNING] messages." -ForegroundColor Yellow
-    Write-Host "=================================================="
+if ($InstallFailed) {
+    Write-Output "`n=================================================="
+    Write-Output "[ERROR] Installation completed with errors."
+    Write-Output "Some components may not be working correctly."
+    Write-Output "Check the logs above for red [ERROR] and orange [WARNING] messages."
+    Write-Output "=================================================="
 }
 else {
-    Write-Host "`nInstallation Complete!" -ForegroundColor Green
-    Write-Host "You can now Run the application by:"
-    Write-Host "1. Double-clicking 'start.bat'"
-    Write-Host "2. Dragging video files onto 'start.bat'" -ForegroundColor Yellow
-    Write-Host "Done."
+    Write-Output "`nInstallation Complete!"
+    Write-Output "You can now Run the application by:"
+    Write-Output "1. Double-clicking 'start.bat'"
+    Write-Output "2. Dragging video files onto 'start.bat'"
+    Write-Output "Done."
 }
 
-Write-Host ""
+Write-Output ""
 Pause
 
-if ($Global:InstallFailed) { Exit 1 }
+if ($InstallFailed) { Exit 1 }
 Exit 0
+

@@ -1,5 +1,0 @@
-flake8
-mypy
-types-PyYAML
-black
-radon

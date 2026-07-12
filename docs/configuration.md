@@ -3,6 +3,7 @@
 The project uses `config.yaml` as the central source of truth.
 
 ## Default `config.yaml`
+
 ```yaml
 # Input/Output paths can be absolute or relative
 input_file: "C:\\Input.mp4"
@@ -40,5 +41,6 @@ audio_sync_offset: 0.0       # Manual delay in seconds
 ```
 
 ## Logic
+
 - **Loader**: `load_config()` uses PyYAML to parse the file safely.
 - **Fallbacks**: If keys are missing, the script defaults to hardcoded safe values (e.g., QTGMC, 16 threads).
