@@ -4,7 +4,7 @@
 **Studio-Reference VHS Restoration Pipeline**
 
 ![Top Language](https://img.shields.io/github/languages/top/ventura8/Auto-VHS-Deinterlacer)
-![Coverage](coverage.svg)
+![Coverage](assets/coverage.svg)
 
 Automated deinterlacing and audio synchronization tool for modernizing VHS captures.
 
@@ -44,7 +44,7 @@ This tool automatically detects high-end hardware (e.g., **RTX 5090**, **Ryzen 9
 
 ## 🚀 Usage
 1.  **Install** (Once):
-    - Right-click `install.ps1` -> **"Run with PowerShell"**.
+    - Right-click `.\install.ps1` -> **"Run with PowerShell"**.
     - This creates a local, self-contained Python environment.
 2.  **Run**:
     - **Drag & Drop** your video file (or folder) onto `start.bat`.
@@ -67,7 +67,7 @@ This tool solves both automatically.
 
 ## **✨ Features**
 
-* **Studio Reference Reliability:** Built on a self-contained, portable Python environment ensuring zero dependency conflicts.
+* **Studio Reference Reliability:** Built on a self-contained local Python environment ensuring zero dependency conflicts.
 * **Archival Grade QTGMC:** Uses `Preset="Very Slow"` with `SourceMatch=3` and `Lossless=2`. Defaults to pure deinterlacing (no denoising/sharpening), but configurable in `config.yaml`.
 * **Smart-Drift Correction:** Enabled by default. Uses adaptive thresholding (absolute 10ms + relative 1.5%) to distinguish between true clock skew and container metadata jitter.
 * **Lossless Audio Workflow:** Configurable support for **PCM (24-bit)** alongside AAC and FLAC, ensuring archival-grade, bit-perfect audio preservation.
@@ -78,19 +78,19 @@ This tool solves both automatically.
 ## **🛠️ Requirements**
 * **Windows 10/11**
 * **Internet Connection** (For first-time setup only)
-* **Python 3.10+**
+* **Python 3.12**
 
 ### **Development Requirements**
-* **90% Code Coverage**: Mandatory for all contributions. Enforced via CI/CD.
-* **pytest**: Run `run_tests.ps1` to verify changes locally before pushing.
+* **Coverage Policy**: Every Python module must remain above 90% coverage, with the repository total also above 90%.
+* **Local Pipeline**: Run `.\run_pipeline_localy.ps1` to verify linting, tests, and badge generation before pushing.
 
 ## **📦 Installation & Usage**
 
 1. **Install (One-Time Setup):**
-   - Right-click `install.ps1` and select **"Run with PowerShell"**.
+     - Right-click `.\install.ps1` and select **"Run with PowerShell"**.
    - This script will:
-     - Create a secluded `.venv` environment.
-     - Download and configure a portable VapourSynth R73 build.
+         - Create a secluded `.VENV` environment.
+    - Install VapourSynth from PyPI into the local environment and initialize the local `.VENV\vs` runtime folder.
      - Install all required QTGMC plugins automatically via `vsrepo`.
      - Generate a `start.bat` launcher.
 
@@ -118,3 +118,15 @@ The script generates a VapourSynth script (`.vpy`) on the fly with defensive plu
 ## **📄 License**
 
 MIT
+
+## **✅ Local Quality Gate**
+
+Run the full local validation pipeline:
+
+```powershell
+.\run_pipeline_localy.ps1
+```
+
+This validates `ruff` + `flake8` + `pylint`, runs tests with coverage, enforces threshold, and overwrites `assets/coverage.svg`.
+
+Coverage expectations are both per-module and total (each above 90%).

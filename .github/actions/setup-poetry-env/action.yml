@@ -1,0 +1,43 @@
+name: setup-poetry-env
+description: Set up Python, install/configure Poetry, restore cache, and install dev dependencies.
+
+inputs:
+  python-version:
+    description: Python version to install.
+    required: true
+  poetry-version:
+    description: Poetry version to install.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v6.3.0
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Poetry
+      shell: bash
+      run: |
+        pip install "poetry==${{ inputs.poetry-version }}"
+
+    - name: Configure Poetry In-Project Virtualenv
+      shell: bash
+      run: |
+        poetry config virtualenvs.in-project true
+
+    - name: Restore Poetry Cache
+      uses: actions/cache@v6.1.0
+      with:
+        path: |
+          ~/.cache/pypoetry
+          .venv
+        key: ${{ runner.os }}-py312-poetry-${{ hashFiles('poetry.lock', 'pyproject.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-py312-poetry-
+
+    - name: Install Dev Dependencies
+      shell: bash
+      run: |
+        poetry install -v --only dev --no-root

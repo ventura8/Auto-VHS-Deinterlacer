@@ -12,37 +12,37 @@ When fixing a file:
 - **DO NOT** make multiple small edits to the same file. Be efficient and thorough.
 
 ## Prerequisites
-- Python 3.12+
-- flake8, mypy, pytest, autopep8 installed
+- Python 3.12 (current `pyproject.toml` and CI target 3.12)
+- Workspace `.VENV` is available
 
 ## Steps
 
 // turbo-all
-1. **MANDATORY: Run autopep8 FIRST** (handles most whitespace/indentation/blank line issues):
+1. **Run Ruff first**:
    ```powershell
-   autopep8 --in-place --aggressive --aggressive <file.py>
+   .\.VENV\Scripts\python.exe -m ruff check .
    ```
 
-2. **Check remaining lint errors**:
+2. **Run Flake8 second**:
    ```powershell
-   flake8 . --count --statistics
+   .\.VENV\Scripts\python.exe -m flake8 .
    ```
 
-3. **Check MyPy (if applicable)**:
+3. **Run Pylint third**:
    ```powershell
-   mypy .
+   .\.VENV\Scripts\python.exe -m pylint auto_deinterlancer.py modules .github/scripts
    ```
 
 4. **Address ALL remaining issues in a SINGLE PASS per file.**
 
 5. **Run tests**:
    ```powershell
-   pytest --tb=short -q
+   .\.VENV\Scripts\python.exe -m pytest -o addopts=
    ```
 
 6. **Generate coverage badge and verify 90%**:
    ```powershell
-   .\run_tests.ps1
+   .\run_pipeline_localy.ps1
    ```
    > [!IMPORTANT]
    > **ALWAYS** generate the coverage badge after tests pass and verify that coverage is at least **90%**. If coverage is below 90%, identify and fill the gaps.

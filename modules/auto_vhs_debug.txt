@@ -1,0 +1,1 @@
+2026-07-12T13:42:34.927+0300 [ERROR] ERROR: Config file not found at C:\Users\ventu\Projects\Auto-VHS-Deinterlacer\modules\config.yaml
