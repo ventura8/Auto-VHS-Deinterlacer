@@ -10,9 +10,19 @@
 
 ## Commands
 
+- `$tomlFiles = git ls-files "*.toml";`
+  `.\.VENV\Scripts\python.exe -m poetry run taplo lint $tomlFiles`
+- `.\.VENV\Scripts\python.exe -m poetry run bandit -ll -r`
+  `auto_deinterlancer.py modules .github/scripts`
+- `.\.VENV\Scripts\python.exe -m poetry run pip-audit`
+- `.\.VENV\Scripts\python.exe -m poetry run black --check`
+  `auto_deinterlancer.py modules tests .github/scripts`
+- `.\.VENV\Scripts\python.exe -m isort --check-only`
+  `auto_deinterlancer.py modules tests .github/scripts`
 - `.\.VENV\Scripts\python.exe -m ruff check .`
 - `.\.VENV\Scripts\python.exe -m flake8 .`
-- `.\.VENV\Scripts\python.exe -m pylint auto_deinterlancer.py modules .github/scripts`
+- `.\.VENV\Scripts\python.exe -m pylint auto_deinterlancer.py`
+  `modules .github/scripts`
 - `.\.VENV\Scripts\python.exe -m pytest -o addopts=`
 - `.\run_pipeline_localy.ps1`
 
@@ -21,4 +31,5 @@
 - Do not add `# noqa` or `pylint: disable` markers to bypass failures.
 - Do not ignore test failures that are directly caused by the code you changed.
 - Keep Windows path handling explicit when a file path is part of the logic.
-- Maintain coverage above 90% for every Python module and above 90% for total repository coverage.
+- Maintain coverage above 90% for every Python module and above 90% for
+  total repository coverage.

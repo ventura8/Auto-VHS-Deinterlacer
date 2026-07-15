@@ -32,6 +32,23 @@ SCRIPT_DIR = get_project_root()
 log_file = os.path.join(SCRIPT_DIR, "auto_vhs_debug.txt")
 logger = logging.getLogger("AutoVHS")
 logger.setLevel(logging.DEBUG)
+DLL_DIRECTORY_HANDLES: List[object] = []
+
+
+def _is_python_launcher_name(base_name: str) -> bool:
+    """Return whether a command basename matches a Python launcher."""
+    return base_name in {"python", "python.exe", "py", "py.exe"} or base_name.startswith("python")
+
+
+def _is_vspipe_script_name(base_name: str) -> bool:
+    """Return whether a command basename looks like a Python vspipe wrapper."""
+    return base_name.startswith("vspipe") and base_name.endswith(".py")
+
+
+def _is_windows_vspipe_launcher(executable_path: str, base_name: str) -> bool:
+    """Return whether a Windows Scripts entry point is launching vspipe."""
+    scripts_segment = f"{os.sep}scripts{os.sep}"
+    return scripts_segment in executable_path and base_name.startswith("vspipe") and base_name.endswith(".exe")
 
 
 def is_python_vspipe_launcher(vspipe_exe):
@@ -41,56 +58,60 @@ def is_python_vspipe_launcher(vspipe_exe):
 
     exe = os.path.abspath(str(vspipe_exe)).lower()
     base = os.path.basename(exe)
-
-    if base in {"python", "python.exe", "py", "py.exe"}:
+    if _is_python_launcher_name(base):
         return True
-
-    if base.startswith("python"):
+    if _is_windows_vspipe_launcher(exe, base):
         return True
+    return _is_vspipe_script_name(base)
 
-    scripts_segment = f"{os.sep}scripts{os.sep}"
-    if scripts_segment in exe and base.startswith("vspipe") and base.endswith(".exe"):
-        return True
 
-    return base.startswith("vspipe") and base.endswith(".py")
+def _resolve_venv_root(base_dir: str) -> str:
+    """Return the preferred local venv root, falling back to the current interpreter."""
+    venv_root = os.path.join(base_dir, ".venv")
+    if os.path.exists(venv_root):
+        return venv_root
+    return os.path.dirname(os.path.dirname(sys.executable))
+
+
+def _get_vapoursynth_plugin_dir(vs_root: str) -> str:
+    """Return the first existing VapourSynth plugin directory."""
+    for folder_name in ("plugins", "vs-plugins"):
+        candidate = os.path.join(vs_root, folder_name)
+        if os.path.exists(candidate):
+            return candidate
+    return os.path.join(vs_root, "plugins")
+
+
+def _build_vspipe_path_entries(vs_root: str) -> list[str]:
+    """Return PATH entries that should be added for VapourSynth execution."""
+    paths_to_add = [vs_root]
+    plugin_dir = _get_vapoursynth_plugin_dir(vs_root)
+    if os.path.exists(plugin_dir):
+        paths_to_add.append(plugin_dir)
+    return paths_to_add
+
+
+def _set_vspipe_environment(env: dict[str, str], venv_root: str):
+    """Populate a process environment with portable VapourSynth paths."""
+    vs_root = os.path.join(venv_root, "vs")
+    if not os.path.exists(vs_root):
+        return
+
+    env["PYTHONHOME"] = vs_root
+    env["PYTHONPATH"] = os.path.join(venv_root, "Lib", "site-packages")
+    existing_path = env.get("PATH", "")
+    extra_path = os.pathsep.join(_build_vspipe_path_entries(vs_root))
+    env["PATH"] = (existing_path + os.pathsep + extra_path) if existing_path else extra_path
 
 
 def get_vspipe_env():
     """Derived environment variables for VSPipe (Portable)."""
     env = os.environ.copy()
     try:
-        # Never force Python runtime home/path for pip-based VapourSynth setups.
-        # Overriding these can break codec bootstrap (`encodings` not found).
         env.pop("PYTHONHOME", None)
         env.pop("PYTHONPATH", None)
-
         base_dir = get_project_root()
-        venv_root = os.path.join(base_dir, ".venv")
-        if not os.path.exists(venv_root):
-            # Fallback
-            venv_root = os.path.dirname(os.path.dirname(sys.executable))
-
-        # Portable VS structure
-        vs_root = os.path.join(venv_root, "vs")
-        if os.path.exists(vs_root):
-            env["PYTHONHOME"] = vs_root
-            env["PYTHONPATH"] = os.path.join(venv_root, "Lib", "site-packages")
-
-            # CRITICAL: Add VS and Plugins to PATH so dependencies are found
-            # This fixes ffms2.dll failing to load if it needs adjacent DLLs
-            paths_to_add = [vs_root]
-
-            plugin_dir = os.path.join(vs_root, "plugins")
-            if not os.path.exists(plugin_dir):
-                plugin_dir = os.path.join(vs_root, "vs-plugins")
-            if os.path.exists(plugin_dir):
-                paths_to_add.append(plugin_dir)
-
-            # Keep venv Scripts ahead of portable VS root so console entry points resolve first.
-            existing_path = env.get("PATH", "")
-            extra_path = os.pathsep.join(paths_to_add)
-            env["PATH"] = (existing_path + os.pathsep + extra_path) if existing_path else extra_path
-
+        _set_vspipe_environment(env, _resolve_venv_root(base_dir))
     except (OSError, ValueError, RuntimeError, KeyError):
         pass
     return env
@@ -157,25 +178,29 @@ def _log_with_flush(log_method, msg):
 ACTIVE_PROCS: List[subprocess.Popen] = []
 
 
+def _terminate_active_process(process: subprocess.Popen):
+    """Terminate one tracked subprocess, escalating to kill if needed."""
+    if process.poll() is not None:
+        return
+    try:
+        log_debug(f"[SYSTEM] Terminating process {process.pid}...")
+        process.terminate()
+        time.sleep(0.1)
+        if process.poll() is None:
+            process.kill()
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        pass
+
+
 def cleanup_on_exit(signum=None, _frame=None):
     """Terminates all registered subprocesses and exits."""
     if signum:
         sig_name = signal.Signals(signum).name
         log_debug(f"[SYSTEM] Received signal {sig_name}. Shutting down...")
 
-    for p in ACTIVE_PROCS:
-        if p.poll() is None:
-            try:
-                log_debug(f"[SYSTEM] Terminating process {p.pid}...")
-                p.terminate()
-                # Give it a moment to die gracefully, then kill if needed
-                time.sleep(0.1)
-                if p.poll() is None:
-                    p.kill()
-            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
-                pass
+    for process in ACTIVE_PROCS:
+        _terminate_active_process(process)
 
-    # Clean exit if we are in a signal handler
     if signum:
         sys.exit(1)
 
@@ -215,27 +240,27 @@ def _add_venv_to_path(venv_root):
         os.environ["PATH"] = venv_scripts + os.pathsep + os.environ["PATH"]
 
 
+def _add_windows_dll_directory(path_value: str):
+    """Best-effort add a DLL search path on Windows."""
+    if platform.system() != "Windows" or not hasattr(os, "add_dll_directory"):
+        return
+    try:
+        handle = os.add_dll_directory(path_value)
+        DLL_DIRECTORY_HANDLES.append(handle)
+    except (OSError, ValueError):
+        pass
+
+
 def _setup_vapoursynth_portable(venv_root):
     """Configures environment for portable VapourSynth."""
     venv_vs = os.path.join(venv_root, "vs")
     if not os.path.exists(venv_vs):
         return
 
-    # Add VS to PATH so vspipe can load its DLLs, but keep Scripts precedence.
     os.environ["PATH"] = os.environ["PATH"] + os.pathsep + venv_vs
+    _add_windows_dll_directory(venv_vs)
 
-    # Windows: Ensure DLLs are findable by Python 3.8+
-    if platform.system() == "Windows" and hasattr(os, "add_dll_directory"):
-        try:
-            os.add_dll_directory(venv_vs)
-        except (OSError, ValueError):
-            pass
-
-    # Set plugin path for VapourSynth plugin autoloading
-    vs_plugins = os.path.join(venv_vs, "plugins")
-    if not os.path.exists(vs_plugins):
-        vs_plugins = os.path.join(venv_vs, "vs-plugins")
-
+    vs_plugins = _get_vapoursynth_plugin_dir(venv_vs)
     if os.path.exists(vs_plugins):
         os.environ["VAPOURSYNTH_PLUGIN_PATH"] = vs_plugins
 
@@ -279,55 +304,65 @@ def parse_ffmpeg_time(line_str):
     if not line_str:
         return None, None, None
 
-    # Match time=HH:MM:SS.ms (optional milliseconds)
     time_match = re.search(r"time=(\d{2}:\d{2}:\d{2}(?:\.\d+)?)", line_str)
-    # Match speed=...x (e.g. speed=0.98x or speed= 1.2x)
     speed_match = re.search(r"speed=\s*(\d+\.?\d*x)", line_str)
 
-    seconds = None
-    time_s = None
-    speed_s = None
-
-    if time_match:
-        original_ts = time_match.group(1)
-        try:
-            parts = original_ts.split(":")
-            h = float(parts[0])
-            m = float(parts[1])
-            s = float(parts[2])
-            seconds = h * 3600 + m * 60 + s
-
-            # Format to HH:MM:SS,mmm (match user requirement)
-            h_int = int(h)
-            m_int = int(m)
-            s_int = int(s)
-            ms_int = int(round((s - s_int) * 1000))
-
-            if ms_int >= 1000:
-                ms_int -= 1000
-                s_int += 1
-            if s_int >= 60:
-                s_int -= 60
-                m_int += 1
-            if m_int >= 60:
-                m_int -= 60
-                h_int += 1
-
-            time_s = f"{h_int:02d}:{m_int:02d}:{s_int:02d},{ms_int:03d}"
-        except (ValueError, IndexError):
-            time_s = original_ts
-            seconds = None
-
-    if speed_match:
-        speed_s = speed_match.group(1)
-        # Ensure 2 decimal places if possible (user example showed 10.76x)
-        try:
-            s_val = float(speed_s.replace("x", ""))
-            speed_s = f"{s_val:.2f}x"
-        except ValueError:
-            pass
-
+    seconds, time_s = _parse_ffmpeg_timestamp_match(time_match)
+    speed_s = _format_ffmpeg_speed_match(speed_match)
     return seconds, time_s, speed_s
+
+
+def _normalize_ffmpeg_timestamp_parts(hours, minutes, seconds):
+    """Normalize parsed FFmpeg time parts into HH:MM:SS,mmm components."""
+    h_int = int(hours)
+    m_int = int(minutes)
+    s_int = int(seconds)
+    ms_int = int(round((seconds - s_int) * 1000))
+
+    if ms_int >= 1000:
+        ms_int -= 1000
+        s_int += 1
+    if s_int >= 60:
+        s_int -= 60
+        m_int += 1
+    if m_int >= 60:
+        m_int -= 60
+        h_int += 1
+    return h_int, m_int, s_int, ms_int
+
+
+def _parse_ffmpeg_timestamp_match(time_match):
+    """Parse the regex match for FFmpeg time output."""
+    if not time_match:
+        return None, None
+
+    original_ts = time_match.group(1)
+    try:
+        hours, minutes, seconds = (float(part) for part in original_ts.split(":"))
+        total_seconds = hours * 3600 + minutes * 60 + seconds
+        h_int, m_int, s_int, ms_int = _normalize_ffmpeg_timestamp_parts(hours, minutes, seconds)
+        return total_seconds, f"{h_int:02d}:{m_int:02d}:{s_int:02d},{ms_int:03d}"
+    except (ValueError, IndexError):
+        return None, original_ts
+
+
+def _format_ffmpeg_speed_match(speed_match):
+    """Parse and normalize the FFmpeg speed token."""
+    if not speed_match:
+        return None
+    speed_s = speed_match.group(1)
+    try:
+        return f"{float(speed_s.replace('x', '')):.2f}x"
+    except ValueError:
+        return speed_s
+
+
+def _should_delete_temp_file(file_path) -> bool:
+    """Return whether a matched file looks like a generated temp artifact."""
+    if not file_path.is_file():
+        return False
+    temp_markers = ("temp", "intermediate", "ffindex", "lwi")
+    return any(marker in file_path.name for marker in temp_markers)
 
 
 def cleanup_temp_files(work_dir, stem):
@@ -341,15 +376,14 @@ def cleanup_temp_files(work_dir, stem):
         "*.vpy",  # Safety: Clean stray VPYs
     ]
 
-    # Be careful with wildcards, only delete if confident
     for p_str in patterns:
-        for f in work_dir.glob(p_str):
-            # Only delete if it looks like a temp file we created
-            if f.is_file() and ("temp" in f.name or "intermediate" in f.name or "ffindex" in f.name or "lwi" in f.name):
-                try:
-                    f.unlink()
-                except OSError:
-                    pass
+        for file_path in work_dir.glob(p_str):
+            if not _should_delete_temp_file(file_path):
+                continue
+            try:
+                file_path.unlink()
+            except OSError:
+                pass
 
 
 def update_progress(percent, message, time_str=None, speed_str=None, eta_str=None, process_name="FFmpeg"):
@@ -533,6 +567,7 @@ def get_start_time(file_path, stream_type="v"):
 __all__ = [
     "get_project_root",
     "is_python_vspipe_launcher",
+    "_get_vapoursynth_plugin_dir",
     "get_vspipe_env",
     "log_debug",
     "log_info",

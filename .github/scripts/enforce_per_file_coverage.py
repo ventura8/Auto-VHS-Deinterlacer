@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import argparse
 import sys
-import xml.etree.ElementTree as et
 from pathlib import Path
+
+from defusedxml import ElementTree as et
 
 
 def _normalize_path(value: str) -> str:
@@ -28,28 +29,49 @@ def _is_python_source(path_str: str) -> bool:
     return normalized.startswith(allowed_prefixes[1:])
 
 
+def _extract_coverage_entry(cls) -> tuple[str, float] | None:
+    """Parse a Cobertura class node into a normalized file coverage tuple."""
+    filename = cls.get("filename")
+    line_rate_raw = cls.get("line-rate")
+    if not filename or line_rate_raw is None:
+        return None
+
+    normalized = _normalize_path(filename)
+    if not _is_python_source(normalized):
+        return None
+
+    try:
+        line_rate = float(line_rate_raw) * 100.0
+    except ValueError:
+        return None
+    return normalized, line_rate
+
+
 def _read_file_coverages(xml_path: Path) -> list[tuple[str, float]]:
     tree = et.parse(xml_path)
     root = tree.getroot()
 
     file_coverages: list[tuple[str, float]] = []
     for cls in root.findall(".//class"):
-        filename = cls.get("filename")
-        line_rate_raw = cls.get("line-rate")
-        if not filename or line_rate_raw is None:
-            continue
-
-        normalized = _normalize_path(filename)
-        if not _is_python_source(normalized):
-            continue
-
-        try:
-            line_rate = float(line_rate_raw) * 100.0
-        except ValueError:
-            continue
-        file_coverages.append((normalized, line_rate))
+        coverage_entry = _extract_coverage_entry(cls)
+        if coverage_entry is not None:
+            file_coverages.append(coverage_entry)
 
     return sorted(file_coverages, key=lambda item: item[0])
+
+
+def _print_file_coverages(file_coverages: list[tuple[str, float]], threshold: float):
+    """Print pass or fail status for each measured file."""
+    print(f"[coverage-gate] Per-file threshold: {threshold:.2f}%")
+    print("[coverage-gate] Evaluated files:")
+    for path_str, pct in file_coverages:
+        status = "PASS" if pct >= threshold else "FAIL"
+        print(f"  - {path_str}: {pct:.2f}% ({status})")
+
+
+def _collect_failures(file_coverages: list[tuple[str, float]], threshold: float) -> list[tuple[str, float]]:
+    """Return files whose line coverage is below the configured threshold."""
+    return [(path_str, pct) for path_str, pct in file_coverages if pct < threshold]
 
 
 def enforce_per_file_coverage(xml_path: Path, threshold: float) -> int:
@@ -64,13 +86,8 @@ def enforce_per_file_coverage(xml_path: Path, threshold: float) -> int:
         print("[coverage-gate] No Python source files found in coverage report.")
         return 1
 
-    failures = [(path_str, pct) for path_str, pct in file_coverages if pct < threshold]
-
-    print(f"[coverage-gate] Per-file threshold: {threshold:.2f}%")
-    print("[coverage-gate] Evaluated files:")
-    for path_str, pct in file_coverages:
-        status = "PASS" if pct >= threshold else "FAIL"
-        print(f"  - {path_str}: {pct:.2f}% ({status})")
+    failures = _collect_failures(file_coverages, threshold)
+    _print_file_coverages(file_coverages, threshold)
 
     if failures:
         print("[coverage-gate] Coverage gate failed. Files below threshold:")

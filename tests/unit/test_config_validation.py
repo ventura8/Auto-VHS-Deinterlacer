@@ -46,6 +46,25 @@ def test_detect_hardware_manual_profile(ad):
             assert settings["cpu_threads"] == 8
 
 
+def test_detect_hardware_manual_profile_cpu_threads_auto(ad):
+    """Manual cpu_threads='auto' should resolve to detected CPU count."""
+    with patch("modules.core.config.PERF_PROFILE", "manual"):
+        with patch("modules.core.config.CONFIG", {"manual_settings": {"cpu_threads": "auto"}}):
+            with patch("modules.core.config.os.cpu_count", return_value=24):
+                settings = ad.detect_hardware_settings()
+                assert settings["cpu_threads"] == 24
+
+
+def test_detect_hardware_manual_profile_cpu_threads_invalid(ad):
+    """Manual cpu_threads should fail fast when value is invalid."""
+    with patch("modules.core.config.PERF_PROFILE", "manual"):
+        with patch("modules.core.config.CONFIG", {"manual_settings": {"cpu_threads": "many"}}):
+            with patch("modules.core.config.sys.exit", side_effect=SystemExit(1)) as mock_exit:
+                with pytest.raises(SystemExit):
+                    ad.detect_hardware_settings()
+                assert mock_exit.called
+
+
 def test_detect_hardware_manual_profile_invalid_settings(ad):
     """Manual profile should exit when manual_settings is not a mapping."""
     with patch("modules.core.config.PERF_PROFILE", "manual"):

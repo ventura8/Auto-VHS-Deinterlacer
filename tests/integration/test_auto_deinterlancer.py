@@ -12,6 +12,67 @@ import pytest
 # But we should rely on the fixtures or direct imports
 
 
+def _build_mock_ctypes(memory_gb: int | None = None, side_effect: Exception | None = None):
+    """Create a ctypes-like shim for hardware detection tests."""
+    mock_ctypes = MagicMock()
+    mock_kernel32 = MagicMock()
+    mock_ctypes.windll.kernel32 = mock_kernel32
+    mock_ctypes.sizeof.return_value = 128
+    mock_ctypes.c_ulong = MagicMock()
+    mock_ctypes.c_ulonglong = MagicMock()
+    mock_ctypes.Structure = type("Structure", (), {"_fields_": []})
+    mock_ctypes.byref = lambda value: value
+
+    if side_effect is not None:
+        mock_kernel32.GlobalMemoryStatusEx.side_effect = side_effect
+        return mock_ctypes
+
+    def _set_memory(ref):
+        ref.ull_total_phys = int(memory_gb or 0) * (1024**3)
+        return True
+
+    mock_kernel32.GlobalMemoryStatusEx.side_effect = _set_memory
+    return mock_ctypes
+
+
+def _render_vpy_content(**kwargs) -> str:
+    """Generate VPY content under mocked filesystem and environment state."""
+    create_vpy_script = importlib.import_module("modules.runtime.vspipe").create_vpy_script
+    abspath_side_effect = kwargs.get("abspath_side_effect", str)
+    config_override = kwargs.get("config_override", {"vspipe_prefetch_threads": 4})
+    override_settings = kwargs.get(
+        "override_settings",
+        {
+            "cpu_threads": 8,
+            "ram_cache_mb": 4000,
+            "use_gpu_opencl": False,
+            "gpu_device_index": 0,
+        },
+    )
+
+    with patch("builtins.open", new_callable=mock_open) as mock_f:
+        with (
+            patch("os.path.getsize", return_value=100),
+            patch("os.path.abspath", side_effect=abspath_side_effect),
+            patch("modules.runtime.vspipe.get_fps", return_value=kwargs.get("fps", 25.0)),
+            patch("modules.runtime.vspipe.CONFIG", config_override),
+            patch("os.getcwd", return_value=kwargs.get("cwd", "C:/repo/it's root")),
+            patch("modules.runtime.vspipe.get_project_root", return_value=kwargs.get("project_root", "C:/repo")),
+            patch(
+                "modules.runtime.vspipe._get_vpy_site_paths",
+                return_value=kwargs.get("site_paths", ["C:/repo/.venv/Lib/site-packages"]),
+            ),
+            patch(
+                "modules.runtime.vspipe._resolve_vspipe_plugin_dir",
+                return_value=kwargs.get("plugin_dir", "C:/repo/.venv/vs/vs-plugins"),
+            ),
+            patch("modules.runtime.vspipe.os.path.exists", return_value=kwargs.get("path_exists", True)),
+        ):
+            create_vpy_script("in.mp4", "out.vpy", "QTGMC", override_settings=override_settings)
+
+    return mock_f().write.call_args_list[0][0][0].decode("utf-8")
+
+
 def test_parse_ffmpeg_time():
     """Parse ffmpeg progress timestamps and handle null input safely."""
     utils = importlib.import_module("modules.core.utils")
@@ -55,6 +116,17 @@ def test_get_fps_duration_start():
         assert utils.get_fps("v.mp4") == 29.97
 
 
+def test_get_vpy_site_paths_handles_uppercase_dot_venv():
+    """Retain uppercase .VENV site-packages entries and include .VENV portable path."""
+    vspipe_module = importlib.import_module("modules.runtime.vspipe")
+    get_vpy_site_paths = getattr(vspipe_module, "_get_vpy_site_paths")
+
+    with patch("sys.path", ["C:/repo/.VENV/Lib/site-packages", "C:/repo/other"]):
+        paths = get_vpy_site_paths("C:/repo/.venv")
+
+    assert "C:/repo/.VENV/Lib/site-packages" in paths
+
+
 def test_get_vpy_info():
     """Test vspipe --info parsing."""
     mock_output = b"Output Index: 0\nType: Video\nFrames: 1000\nFPS: 30000/1001 (29.970 fps)\nFormat Name: RGB24"
@@ -70,71 +142,73 @@ def test_get_vpy_info():
         assert "PYTHONPATH" not in env
 
 
-def test_detect_hardware_logic():
-    """Test hardware detection profiles and NVIDIA prioritization."""
+def test_detect_hardware_logic_prioritizes_nvidia_gpu_index():
+    """Hardware detection should prefer the NVIDIA index from mixed GPU output."""
     config_module = importlib.import_module("modules.core.config")
     detect_hardware_settings = config_module.detect_hardware_settings
 
-    with patch("os.cpu_count", return_value=12):
-        with patch("shutil.which", return_value="/bin/nvidia-smi"):
-            # Mock Multiple GPUs: 0: Intel, 1: NVIDIA
-            gpu_list = b"GPU 0: Intel(R) UHD Graphics\nGPU 1: NVIDIA GeForce RTX 3080"
-            with patch("subprocess.check_output", return_value=gpu_list):
-                settings = detect_hardware_settings()
-                assert settings["cpu_threads"] == 12
-                assert settings["use_gpu_opencl"] is True
-                assert settings["gpu_device_index"] == 1  # Should prioritize NVIDIA at index 1
+    with (
+        patch("os.cpu_count", return_value=12),
+        patch("shutil.which", return_value="/bin/nvidia-smi"),
+        patch("subprocess.check_output", return_value=b"GPU 0: Intel(R) UHD Graphics\nGPU 1: NVIDIA GeForce RTX 3080"),
+    ):
+        settings = detect_hardware_settings()
 
-    # Robust Mock for ctypes Memory Status
-    mock_ctypes = MagicMock()
-    mock_kernel32 = MagicMock()
-    mock_ctypes.windll.kernel32 = mock_kernel32
-    mock_ctypes.sizeof.return_value = 128
-    mock_ctypes.c_ulong = MagicMock()
-    mock_ctypes.c_ulonglong = MagicMock()
-    mock_ctypes.Structure = type("Structure", (), {"_fields_": []})
-    mock_ctypes.byref = lambda value: value
+    assert settings["cpu_threads"] == 12
+    assert settings["use_gpu_opencl"] is True
+    assert settings["gpu_device_index"] == 1
 
-    def mock_global_memory_status_ex_64(ref):
-        ref.ull_total_phys = 64 * (1024**3)
-        return True
 
-    mock_kernel32.GlobalMemoryStatusEx.side_effect = mock_global_memory_status_ex_64
+def test_detect_hardware_logic_uses_high_memory_profile():
+    """Hardware detection should apply the high-memory cache profile."""
+    config_module = importlib.import_module("modules.core.config")
+    detect_hardware_settings = config_module.detect_hardware_settings
 
-    # Patch ctypes and byref
-    with patch.object(config_module, "ctypes", mock_ctypes):
-        with patch("os.cpu_count", return_value=32):
-            with patch("shutil.which", return_value="/bin/nvidia-smi"):
-                with patch("subprocess.check_output", return_value=b"GPU 0: NVIDIA RTX 5090"):
-                    settings = detect_hardware_settings()
-                    assert settings["ram_cache_mb"] == 32768
-                    assert settings["use_gpu_opencl"] is True
-                    assert settings["gpu_device_index"] == 0
+    with (
+        patch.object(config_module, "ctypes", _build_mock_ctypes(memory_gb=64)),
+        patch("os.cpu_count", return_value=32),
+        patch("shutil.which", return_value="/bin/nvidia-smi"),
+        patch("subprocess.check_output", return_value=b"GPU 0: NVIDIA RTX 5090"),
+    ):
+        settings = detect_hardware_settings()
 
-            # Test Mid-Range RAM (32GB -> 35% Cache)
-            def mock_global_memory_status_ex_32(ref):
-                ref.ull_total_phys = 32 * (1024**3)
-                return True
+    assert settings["ram_cache_mb"] == 32768
+    assert settings["use_gpu_opencl"] is True
+    assert settings["gpu_device_index"] == 0
 
-            mock_kernel32.GlobalMemoryStatusEx.side_effect = mock_global_memory_status_ex_32
 
-            with patch.object(config_module, "ctypes", mock_ctypes):
-                with patch("os.cpu_count", return_value=16):
-                    with patch("shutil.which", return_value="/bin/rocm-smi"):
-                        with patch("subprocess.check_output", return_value=b"AMD Radeon"):
-                            settings = detect_hardware_settings()
-                            assert settings["ram_cache_mb"] == 11468
-                            assert settings["gpu_device_index"] == 0
+def test_detect_hardware_logic_uses_midrange_memory_profile():
+    """Hardware detection should apply the midrange cache profile."""
+    config_module = importlib.import_module("modules.core.config")
+    detect_hardware_settings = config_module.detect_hardware_settings
 
-            # Test fallback/exception path
-            mock_kernel32.GlobalMemoryStatusEx.side_effect = OSError("Ctypes Error")
-            with patch.object(config_module, "ctypes", mock_ctypes):
-                with patch("os.cpu_count", return_value=8):
-                    with patch("shutil.which", return_value=None):
-                        settings = detect_hardware_settings()
-                        assert settings["ram_cache_mb"] == 4000
-                        assert settings["gpu_device_index"] == 0
-                        assert settings["use_gpu_opencl"] is True
+    with (
+        patch.object(config_module, "ctypes", _build_mock_ctypes(memory_gb=32)),
+        patch("os.cpu_count", return_value=16),
+        patch("shutil.which", return_value="/bin/rocm-smi"),
+        patch("subprocess.check_output", return_value=b"AMD Radeon"),
+    ):
+        settings = detect_hardware_settings()
+
+    assert settings["ram_cache_mb"] == 11468
+    assert settings["gpu_device_index"] == 0
+
+
+def test_detect_hardware_logic_falls_back_on_ctypes_failure():
+    """Hardware detection should keep safe defaults when ctypes probing fails."""
+    config_module = importlib.import_module("modules.core.config")
+    detect_hardware_settings = config_module.detect_hardware_settings
+
+    with (
+        patch.object(config_module, "ctypes", _build_mock_ctypes(side_effect=OSError("Ctypes Error"))),
+        patch("os.cpu_count", return_value=8),
+        patch("shutil.which", return_value=None),
+    ):
+        settings = detect_hardware_settings()
+
+    assert settings["ram_cache_mb"] == 4000
+    assert settings["gpu_device_index"] == 0
+    assert settings["use_gpu_opencl"] is True
 
 
 def testget_input_files_cli():
@@ -165,60 +239,43 @@ def testget_input_files_interactive():
 
 
 def test_create_vpy_script():
-    """Test VPY script generation."""
-    create_vpy_script = importlib.import_module("modules.runtime.vspipe").create_vpy_script
+    """Generated VPY should include the expected source and retry logic."""
+    content = _render_vpy_content()
+    assert "core.ffms2.Source" in content
+    assert "hasattr(core.std, 'Prefetch')" in content
+    assert "retry_args.pop('device', None)" in content
+    assert "retry_args['opencl'] = False" in content
 
-    with patch("builtins.open", new_callable=mock_open) as mock_f:
-        with patch("os.path.getsize", return_value=100):
-            with patch("os.path.abspath", side_effect=str):
-                with patch("modules.runtime.vspipe.get_fps", return_value=25.0):
-                    with patch("modules.runtime.vspipe.CONFIG", {"vspipe_prefetch_threads": 4}):
-                        create_vpy_script("in.mp4", "out.vpy", "QTGMC")
-                        content = mock_f().write.call_args_list[0][0][0].decode("utf-8")
-                        assert "core.ffms2.Source" in content
-                        assert "hasattr(core.std, 'Prefetch')" in content
 
-                        tree = ast.parse(content)
-                        fallback_func = next(
-                            node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_run_qtgmc_with_fallback"
-                        )
+def test_create_vpy_script_adds_prefetch_and_valid_python():
+    """Generated VPY should include prefetch settings and parse as Python."""
+    content = _render_vpy_content()
+    assert "clip = core.std.Prefetch(clip, threads=4)" in content
+    ast.parse(content)
 
-                        # Validate both retry paths in generated fallback logic.
-                        has_device_retry = any(
-                            isinstance(node, ast.Call)
-                            and isinstance(node.func, ast.Attribute)
-                            and node.func.attr == "pop"
-                            and isinstance(node.func.value, ast.Name)
-                            and node.func.value.id == "retry_args"
-                            and node.args
-                            and isinstance(node.args[0], ast.Constant)
-                            and node.args[0].value == "device"
-                            for node in ast.walk(fallback_func)
-                        )
-                        has_opencl_disable = any(
-                            isinstance(node, ast.Assign)
-                            and isinstance(node.value, ast.Constant)
-                            and node.value.value is False
-                            and any(
-                                isinstance(target, ast.Subscript)
-                                and isinstance(target.value, ast.Name)
-                                and target.value.id == "retry_args"
-                                and isinstance(target.slice, ast.Constant)
-                                and target.slice.value == "opencl"
-                                for target in node.targets
-                            )
-                            for node in ast.walk(fallback_func)
-                        )
-                        assert has_device_retry
-                        assert has_opencl_disable
 
-                        prefetch_calls = [
-                            node
-                            for node in ast.walk(tree)
-                            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "Prefetch"
-                        ]
-                        assert prefetch_calls
-                        assert any(any(keyword.arg == "threads" for keyword in call.keywords) for call in prefetch_calls)
+def test_create_vpy_script_prefetch_auto_uses_cpu_threads():
+    """Auto prefetch should resolve to configured cpu_threads."""
+    content = _render_vpy_content(
+        config_override={"manual_settings": {"vspipe_prefetch_threads": "auto"}},
+        override_settings={
+            "cpu_threads": 12,
+            "ram_cache_mb": 4000,
+            "use_gpu_opencl": False,
+            "gpu_device_index": 0,
+        },
+    )
+    assert "clip = core.std.Prefetch(clip, threads=12)" in content
+    ast.parse(content)
+
+
+def test_create_vpy_script_uses_safe_python_path_literals_and_retains_dll_handles():
+    """Generated VPY should safely embed paths and keep DLL directory handles alive."""
+    content = _render_vpy_content(abspath_side_effect=lambda _value: "C:/captures/it's tape.mp4")
+    assert "_DLL_DIRECTORY_HANDLES = []" in content
+    assert "_DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(" in content
+    assert 'core.ffms2.Source("C:/captures/it\'s tape.mp4"' in content
+    ast.parse(content)
 
 
 def test_process_video_resume_final():
@@ -321,56 +378,69 @@ def test_main_startup():
                         assert mock_process.called
 
 
-def testget_input_files_comprehensive():
-    """Test folder scanning, defaults, and interactive logic."""
+def test_get_input_files_defaults_to_input_folder():
+    """Empty interactive input should scan the default input folder."""
     get_input_files = importlib.import_module("modules.runtime.pipeline").get_input_files
 
-    with patch("sys.argv", ["script.py"]):
-        # 1. Default to "input" folder
-        with patch("builtins.input", return_value=""):
-            with patch("modules.runtime.pipeline.Path.exists", return_value=True):
-                with patch("modules.runtime.pipeline.Path.is_dir", return_value=True):
-                    with patch("modules.runtime.pipeline.Path.iterdir") as mock_iter:
-                        f1 = MagicMock()
-                        f1.is_file.return_value = True
-                        f1.suffix = ".mp4"
-                        f1.name = "vid.mp4"
-                        mock_iter.return_value = [f1]
+    file_mock = MagicMock()
+    file_mock.is_file.return_value = True
+    file_mock.suffix = ".mp4"
+    file_mock.name = "vid.mp4"
 
-                        files = get_input_files()
-                        assert len(files) == 1
-                        assert files[0].name == "vid.mp4"
+    with (
+        patch("sys.argv", ["script.py"]),
+        patch("builtins.input", return_value=""),
+        patch("modules.runtime.pipeline.Path.exists", return_value=True),
+        patch("modules.runtime.pipeline.Path.is_dir", return_value=True),
+        patch("modules.runtime.pipeline.Path.iterdir", return_value=[file_mock]),
+    ):
+        files = get_input_files()
 
-        # 2. Interactive Folder Scan
-        with patch("builtins.input", return_value="my_folder"):
-            with patch("modules.runtime.pipeline.Path.exists", return_value=True):
-                with patch("modules.runtime.pipeline.Path.is_file", return_value=False):
-                    with patch("modules.runtime.pipeline.Path.is_dir", return_value=True):
-                        with patch("modules.runtime.pipeline.Path.iterdir") as mock_iter:
-                            f1 = MagicMock()
-                            f1.is_file.return_value = True
-                            f1.suffix = ".mkv"
-                            f1.name = "movie.mkv"
+    assert len(files) == 1
+    assert files[0].name == "vid.mp4"
 
-                            f2 = MagicMock()
-                            f2.is_file.return_value = True
-                            f2.suffix = ".mov"
-                            f2.name = "movie_deinterlaced.mov"
 
-                            mock_iter.return_value = [f1, f2]
+def test_get_input_files_interactive_folder_scan_filters_processed_files():
+    """Interactive folder scan should ignore already-processed outputs."""
+    get_input_files = importlib.import_module("modules.runtime.pipeline").get_input_files
 
-                            files = get_input_files()
-                            # Test that it filters out 'deinterlaced' files
-                            assert len(files) == 1
-                            assert files[0].name == "movie.mkv"
+    valid_file = MagicMock()
+    valid_file.is_file.return_value = True
+    valid_file.suffix = ".mkv"
+    valid_file.name = "movie.mkv"
 
-        # 3. Quoted String handling
-        with patch("builtins.input", return_value='"quoted_file.mp4"'):
-            # Provide exists=True so it is accepted
-            with patch("modules.runtime.pipeline.Path.exists", return_value=True):
-                with patch("modules.runtime.pipeline.Path.is_file", return_value=True):
-                    files = get_input_files()
-                    assert len(files) == 1
+    processed_file = MagicMock()
+    processed_file.is_file.return_value = True
+    processed_file.suffix = ".mov"
+    processed_file.name = "movie_deinterlaced.mov"
+
+    with (
+        patch("sys.argv", ["script.py"]),
+        patch("builtins.input", return_value="my_folder"),
+        patch("modules.runtime.pipeline.Path.exists", return_value=True),
+        patch("modules.runtime.pipeline.Path.is_file", return_value=False),
+        patch("modules.runtime.pipeline.Path.is_dir", return_value=True),
+        patch("modules.runtime.pipeline.Path.iterdir", return_value=[valid_file, processed_file]),
+    ):
+        files = get_input_files()
+
+    assert len(files) == 1
+    assert files[0].name == "movie.mkv"
+
+
+def test_get_input_files_accepts_quoted_interactive_file():
+    """Interactive quoted file input should resolve to one accepted path."""
+    get_input_files = importlib.import_module("modules.runtime.pipeline").get_input_files
+
+    with (
+        patch("sys.argv", ["script.py"]),
+        patch("builtins.input", return_value='"quoted_file.mp4"'),
+        patch("modules.runtime.pipeline.Path.exists", return_value=True),
+        patch("modules.runtime.pipeline.Path.is_file", return_value=True),
+    ):
+        files = get_input_files()
+
+    assert len(files) == 1
 
 
 def test_get_start_time_exception():

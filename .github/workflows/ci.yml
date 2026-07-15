@@ -44,25 +44,30 @@ jobs:
         run: |
           poetry install -v --only main,dev --no-root
 
-      - name: Install PSScriptAnalyzer
-        shell: pwsh
-        run: |
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-          Install-Module -Name PSScriptAnalyzer -Repository PSGallery -Scope CurrentUser -Force -AllowClobber
       - name: Run PowerShell Lint
         shell: pwsh
         run: |
-          Import-Module PSScriptAnalyzer
-          $settingsPath = Join-Path $PWD "tools/psscriptanalyzer.settings.psd1"
-          $scripts = @("install.ps1", "run_pipeline_localy.ps1")
-          $issues = @()
-          foreach ($scriptPath in $scripts) {
-            $issues += Invoke-ScriptAnalyzer -Path $scriptPath -Settings $settingsPath
-          }
-          if ($issues.Count -gt 0) {
-            $issues | Select-Object RuleName, Severity, ScriptName, Line, Message | Format-Table -AutoSize
-            throw "PowerShell lint failed with $($issues.Count) issue(s)."
-          }
+          ./.github/scripts/run_powershell_lint.ps1 -RepoRoot $PWD
+      - name: Run Taplo TOML Lint
+        run: |
+          files=$(git ls-files '*.toml')
+          if [ -z "$files" ]; then
+            echo "No TOML files found to lint"
+            exit 1
+          fi
+          poetry run taplo lint $files
+      - name: Run Bandit Security Scan
+        run: |
+          poetry run bandit -ll -r auto_deinterlancer.py modules .github/scripts
+      - name: Run pip-audit Dependency Scan
+        run: |
+          poetry run pip-audit
+      - name: Run Black
+        run: |
+          poetry run black --check auto_deinterlancer.py modules tests .github/scripts
+      - name: Run isort
+        run: |
+          poetry run isort --check-only auto_deinterlancer.py modules tests .github/scripts
       - name: Run Ruff
         run: |
           poetry run ruff check auto_deinterlancer.py modules tests .github/scripts
@@ -72,6 +77,90 @@ jobs:
       - name: Run Pylint
         run: |
           poetry run pylint auto_deinterlancer.py modules .github/scripts
+
+      - name: Run Radon Complexity
+        id: radon_complexity
+        continue-on-error: true
+        run: |
+          mkdir -p assets
+          set +e
+          poetry run python .github/scripts/enforce_radon_grade.py --summary-out assets/radon_summary.md
+          status=$?
+          cat assets/radon_summary.md >> $GITHUB_STEP_SUMMARY
+          exit $status
+
+      - name: Run Radon Maintainability
+        id: radon_maintainability
+        continue-on-error: true
+        run: |
+          mkdir -p assets
+          set +e
+          poetry run python .github/scripts/enforce_radon_grade.py --metric mi --summary-out assets/radon_mi_summary.md
+          status=$?
+          cat assets/radon_mi_summary.md >> $GITHUB_STEP_SUMMARY
+          exit $status
+
+      - name: Run Radon Raw Metrics
+        id: radon_raw
+        continue-on-error: true
+        run: |
+          mkdir -p assets
+          set +e
+          set -o pipefail
+          poetry run radon raw auto_deinterlancer.py modules tests .github/scripts | tee assets/radon_raw.txt
+          status=$?
+          {
+            echo "## Radon Raw Metrics"
+            echo
+            echo "\`\`\`text"
+            cat assets/radon_raw.txt
+            echo "\`\`\`"
+          } >> $GITHUB_STEP_SUMMARY
+          exit $status
+
+      - name: Run Radon Halstead Metrics
+        id: radon_halstead
+        continue-on-error: true
+        run: |
+          mkdir -p assets
+          set +e
+          set -o pipefail
+          poetry run radon hal auto_deinterlancer.py modules tests .github/scripts | tee assets/radon_hal.txt
+          status=$?
+          {
+            echo "## Radon Halstead Metrics"
+            echo
+            echo "\`\`\`text"
+            cat assets/radon_hal.txt
+            echo "\`\`\`"
+          } >> $GITHUB_STEP_SUMMARY
+          exit $status
+
+      - name: Check Radon Status
+        if: always()
+        run: |
+          failed_steps=""
+
+          if [ "${{ steps.radon_complexity.outcome }}" != "success" ]; then
+            failed_steps="${failed_steps} Radon Complexity"
+          fi
+
+          if [ "${{ steps.radon_maintainability.outcome }}" != "success" ]; then
+            failed_steps="${failed_steps} Radon Maintainability"
+          fi
+
+          if [ "${{ steps.radon_raw.outcome }}" != "success" ]; then
+            failed_steps="${failed_steps} Radon Raw Metrics"
+          fi
+
+          if [ "${{ steps.radon_halstead.outcome }}" != "success" ]; then
+            failed_steps="${failed_steps} Radon Halstead Metrics"
+          fi
+
+          if [ -n "$failed_steps" ]; then
+            echo "Radon checks failed:$failed_steps"
+            exit 1
+          fi
 
       - name: Run Markdown Auto-Delint
         run: |

@@ -5,7 +5,7 @@ Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $repoRoot
-$venvPy = "$repoRoot\.venv\Scripts\python.exe"
+$venvPy = "$repoRoot\.VENV\Scripts\python.exe"
 
 if (-not (Test-Path $venvPy)) {
     throw "Virtual environment interpreter not found at $venvPy. Run install.ps1 first."
@@ -79,36 +79,38 @@ Invoke-Step "Install PR review tooling" {
 }
 
 Invoke-Step "Run PowerShell Lint" {
-    if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
-        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
-        Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force -AllowClobber
+    $lintScript = Join-Path $repoRoot ".github\scripts\run_powershell_lint.ps1"
+    if (-not (Test-Path $lintScript)) {
+        throw "PowerShell lint runner script not found: $lintScript"
     }
 
-    Import-Module PSScriptAnalyzer
+    & $lintScript -RepoRoot $repoRoot
+}
 
-    $settingsPath = Join-Path $repoRoot "tools\psscriptanalyzer.settings.psd1"
-    if (-not (Test-Path $settingsPath)) {
-        throw "PSScriptAnalyzer settings file not found: $settingsPath"
+Invoke-Step "Run Taplo TOML Lint" {
+    $tomlFiles = git ls-files "*.toml"
+    if (-not $tomlFiles) {
+        throw "No TOML files found to lint"
     }
 
-    $psScripts = @(
-        (Join-Path $repoRoot "install.ps1"),
-        (Join-Path $repoRoot "run_pipeline_localy.ps1")
-    )
+    $taploArgs = @("run", "taplo", "lint") + $tomlFiles
+    Invoke-PoetryCommand $taploArgs
+}
 
-    $issues = @()
-    foreach ($scriptPath in $psScripts) {
-        if (-not (Test-Path $scriptPath)) {
-            throw "PowerShell script not found: $scriptPath"
-        }
+Invoke-Step "Run Bandit Security Scan" {
+    Invoke-PoetryCommand @("run", "bandit", "-ll", "-r", "auto_deinterlancer.py", "modules", ".github/scripts")
+}
 
-        $issues += Invoke-ScriptAnalyzer -Path $scriptPath -Settings $settingsPath
-    }
+Invoke-Step "Run pip-audit Dependency Scan" {
+    Invoke-PoetryCommand @("run", "pip-audit")
+}
 
-    if ($issues.Count -gt 0) {
-        $issues | Select-Object RuleName, Severity, ScriptName, Line, Message | Format-Table -AutoSize
-        throw "PowerShell lint failed with $($issues.Count) issue(s)."
-    }
+Invoke-Step "Run Black" {
+    Invoke-PoetryCommand @("run", "black", "--check", "auto_deinterlancer.py", "modules", "tests", ".github/scripts")
+}
+
+Invoke-Step "Run isort" {
+    Invoke-PoetryCommand @("run", "isort", "--check-only", "auto_deinterlancer.py", "modules", "tests", ".github/scripts")
 }
 
 Invoke-Step "Run Ruff" {
@@ -121,6 +123,44 @@ Invoke-Step "Run Flake8" {
 
 Invoke-Step "Run Pylint" {
     Invoke-PoetryCommand @("run", "pylint", "auto_deinterlancer.py", "modules", "tests", ".github/scripts")
+}
+
+Invoke-Step "Run Radon Complexity" {
+    if (-not (Test-Path "assets")) {
+        New-Item -ItemType Directory -Path "assets" | Out-Null
+    }
+
+    Invoke-PoetryCommand @("run", "python", ".github/scripts/enforce_radon_grade.py", "--summary-out", "assets/radon_summary.md")
+    Get-Content "assets/radon_summary.md"
+}
+
+Invoke-Step "Run Radon Maintainability" {
+    if (-not (Test-Path "assets")) {
+        New-Item -ItemType Directory -Path "assets" | Out-Null
+    }
+
+    Invoke-PoetryCommand @("run", "python", ".github/scripts/enforce_radon_grade.py", "--metric", "mi", "--summary-out", "assets/radon_mi_summary.md")
+    Get-Content "assets/radon_mi_summary.md"
+}
+
+Invoke-Step "Run Radon Raw Metrics" {
+    if (-not (Test-Path "assets")) {
+        New-Item -ItemType Directory -Path "assets" | Out-Null
+    }
+
+    Invoke-PoetryCommand @("run", "radon", "raw", "auto_deinterlancer.py", "modules", "tests", ".github/scripts") |
+        Tee-Object -FilePath "assets/radon_raw.txt"
+    Get-Content "assets/radon_raw.txt"
+}
+
+Invoke-Step "Run Radon Halstead Metrics" {
+    if (-not (Test-Path "assets")) {
+        New-Item -ItemType Directory -Path "assets" | Out-Null
+    }
+
+    Invoke-PoetryCommand @("run", "radon", "hal", "auto_deinterlancer.py", "modules", "tests", ".github/scripts") |
+        Tee-Object -FilePath "assets/radon_hal.txt"
+    Get-Content "assets/radon_hal.txt"
 }
 
 Invoke-Step "Run Markdown Auto-Delint" {
