@@ -103,4 +103,6 @@ performance_profile: "auto"
 
 # manual_settings: Override parameters for specific hardware control.
 manual_settings:
-  cpu_threads: 32     # Thread count for FFmpeg/VapourSynth concurrency.
+  cpu_threads: "auto"     # Thread count for FFmpeg/VapourSynth concurrency.
+  vspipe_prefetch_threads: "auto"  # Queue extra VapourSynth frames (auto = cpu_threads for maximum throughput).
+  vspipe_requests: "auto"  # vspipe frame request depth (auto = 2x cpu_threads, capped at 64).

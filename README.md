@@ -139,4 +139,7 @@ Run the full local validation pipeline:
 ```
 
 This validates Ruff, Flake8, Pylint, Markdown linting, tests with coverage,
-coverage threshold enforcement, and regeneration of `assets/coverage.svg`.
+PowerShell linting, Taplo TOML linting, Bandit security scanning,
+pip-audit dependency scanning, Black formatting, isort import ordering,
+Radon quality gates, coverage threshold enforcement, and regeneration of
+`assets/coverage.svg`.

@@ -17,6 +17,21 @@ def test_pipeline_interactive_input_interrupt():
         assert not files
 
 
+def test_expand_input_path_filters_unsupported_and_processed_files():
+    """Direct file inputs should use the same candidate-video filter as CLI paths."""
+    pipeline = importlib.import_module("modules.runtime.pipeline")
+    expand_input_path = getattr(pipeline, "_expand_input_path")
+
+    supported_path = Path("clip.mp4")
+    processed_path = Path("clip_deinterlaced.mp4")
+    unsupported_path = Path("notes.txt")
+
+    with patch.object(Path, "is_file", return_value=True):
+        assert expand_input_path(supported_path, {".mp4"}) == [supported_path]
+        assert expand_input_path(processed_path, {".mp4"}) == []
+        assert expand_input_path(unsupported_path, {".mp4"}) == []
+
+
 def test_pipeline_audio_sync_logic():
     """Test _calculate_audio_sync logic branches."""
     pipeline = importlib.import_module("modules.runtime.pipeline")
@@ -107,7 +122,7 @@ def test_pipeline_run_encoding_read_error():
 
         with patch("modules.runtime.pipeline.get_vspipe_env", return_value={}):
             with patch("threading.Thread"):
-                result = run_encoding_pipeline(vspipe_cmd, ffmpeg_cmd, Path("t.vpy"), 100)
+                result = run_encoding_pipeline(vspipe_cmd, ffmpeg_cmd, 100)
 
     assert result is False
 

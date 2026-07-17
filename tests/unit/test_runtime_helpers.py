@@ -115,12 +115,18 @@ def test_path_setup_helpers_and_environment_fallbacks():
                     assert "VAPOURSYNTH_PLUGIN_PATH" in utils.os.environ
                     assert "vs-plugins" in utils.os.environ["VAPOURSYNTH_PLUGIN_PATH"].replace("\\", "/")
 
+    with patch("modules.core.utils.platform.system", return_value="Windows"):
+        with patch("modules.core.utils.os.add_dll_directory", return_value="handle", create=True):
+            with patch.object(utils, "DLL_DIRECTORY_HANDLES", []):
+                getattr(utils, "_add_windows_dll_directory")("C:/vs")
+                assert utils.DLL_DIRECTORY_HANDLES == ["handle"]
+
     with patch("modules.core.utils.get_project_root", side_effect=OSError("root")):
         utils.setup_environment()
 
 
-def test_cleanup_progress_and_gpu_name_branches():
-    """Cover cleanup exception path, progress clamping, and GPU parse success."""
+def test_cleanup_progress_branches():
+    """Cover cleanup exception path and progress clamping."""
     utils = importlib.import_module("modules.core.utils")
 
     work_dir = MagicMock()
@@ -139,6 +145,11 @@ def test_cleanup_progress_and_gpu_name_branches():
         writes = "".join(call.args[0] for call in mock_stderr.write.call_args_list)
         assert "  0.0%" in writes
         assert "100.0%" in writes
+
+
+def test_get_gpu_name_parses_nvidia_output():
+    """GPU helper should return the parsed NVIDIA model name."""
+    utils = importlib.import_module("modules.core.utils")
 
     with patch("subprocess.check_output", return_value=b"GPU 0: NVIDIA GeForce RTX 4090 (UUID: test)"):
         assert utils.get_gpu_name() == "NVIDIA GeForce RTX 4090"

@@ -3,6 +3,7 @@
 import ctypes
 import os
 import sys
+from typing import NoReturn
 
 import yaml
 
@@ -117,6 +118,8 @@ def _detect_gpu_settings(settings):
     if nvidia_index is not None and gpu_name is not None:
         log_info(f"  > NVIDIA GPU Found (Index {nvidia_index}): {gpu_name}")
         settings["use_gpu_opencl"] = True
+        settings["has_nvidia"] = True
+        settings["has_av1_nvenc"] = True
         settings["gpu_device_index"] = nvidia_index
         if ENCODER == "av1":
             log_info("  > GPU Acceleration: ENABLED (OpenCL + NVENC)")
@@ -128,7 +131,57 @@ def _detect_gpu_settings(settings):
         return
 
     # Fallback if no NVIDIA or smi fails
+    settings["has_nvidia"] = False
+    settings["has_av1_nvenc"] = False
     settings["gpu_device_index"] = 0
+
+
+def _reject_invalid_cpu_threads(message) -> NoReturn:
+    """Abort configuration loading when cpu_threads is invalid."""
+    log_error(message)
+    sys.exit(1)
+
+
+def _parse_cpu_threads_from_string(raw_value, detected_threads):
+    """Parse cpu_threads from a string value."""
+    stripped = raw_value.strip().lower()
+    if stripped == "auto":
+        return detected_threads
+
+    try:
+        return int(stripped)
+    except ValueError:
+        _reject_invalid_cpu_threads("ERROR: manual_settings.cpu_threads must be a positive integer or 'auto'.")
+
+
+def _parse_cpu_threads_from_int(raw_value):
+    """Parse cpu_threads from an integer value."""
+    return raw_value
+
+
+def _is_non_bool_int(raw_value):
+    """Return True when raw_value is an int but not a bool."""
+    return isinstance(raw_value, int) and not isinstance(raw_value, bool)
+
+
+def _validate_cpu_threads(parsed):
+    """Ensure cpu_threads is a positive integer."""
+    if parsed < 1:
+        _reject_invalid_cpu_threads("ERROR: manual_settings.cpu_threads must be >= 1.")
+    return parsed
+
+
+def _resolve_cpu_threads(raw_value):
+    """Normalize cpu_threads from config into a valid positive integer."""
+    detected_threads = os.cpu_count() or 16
+
+    if isinstance(raw_value, str):
+        return _validate_cpu_threads(_parse_cpu_threads_from_string(raw_value, detected_threads))
+
+    if _is_non_bool_int(raw_value):
+        return _validate_cpu_threads(_parse_cpu_threads_from_int(raw_value))
+
+    _reject_invalid_cpu_threads("ERROR: manual_settings.cpu_threads must be a positive integer or 'auto'.")
 
 
 # HARDWARE DETECTION & OPTIMIZATION
@@ -141,6 +194,8 @@ def detect_hardware_settings():
         "cpu_threads": os.cpu_count() or 16,
         "ram_cache_mb": 4000,  # Default safe value for low-RAM systems
         "use_gpu_opencl": True,  # Optimistic: Default to Hardware Acceleration
+        "has_nvidia": False,
+        "has_av1_nvenc": False,
         "gpu_device_index": 0,  # Default device index
     }
 
@@ -150,6 +205,7 @@ def detect_hardware_settings():
             log_error("ERROR: Invalid manual_settings in config. Must be a mapping.")
             sys.exit(1)
         settings.update(manual)
+        settings["cpu_threads"] = _resolve_cpu_threads(settings.get("cpu_threads", "auto"))
         log_info("Processing Profile: MANUAL")
     else:
         # Auto-Detect
@@ -181,6 +237,8 @@ def _load_hw_settings():
             "cpu_threads": os.cpu_count() or 16,
             "ram_cache_mb": 4000,
             "use_gpu_opencl": True,
+            "has_nvidia": False,
+            "has_av1_nvenc": False,
             "gpu_device_index": 0,
         }
     return detect_hardware_settings()

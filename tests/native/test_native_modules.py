@@ -1,4 +1,4 @@
-"""Unit tests for native vspipe helpers and havsfunc patching utilities."""
+"""Unit tests for native vspipe helper behavior."""
 
 import builtins
 import importlib
@@ -6,141 +6,26 @@ import io
 import sys
 from importlib.machinery import ModuleSpec
 from types import SimpleNamespace
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from modules.core import patch_havsfunc
+
+@pytest.fixture(autouse=True)
+def _cleanup_vspipe_native_module_cache():
+    """Ensure vspipe_native is not cached across test boundaries."""
+    sys.modules.pop("modules.runtime.vspipe_native", None)
+    yield
+    sys.modules.pop("modules.runtime.vspipe_native", None)
 
 
 def _load_vspipe_native(fake_vs):
     """Reload vspipe_native with a fake vapoursynth module injected."""
+    sys.modules.pop("modules.runtime.vspipe_native", None)
     with patch.dict(sys.modules, {"vapoursynth": fake_vs}):
         native = importlib.import_module("modules.runtime.vspipe_native")
 
         return importlib.reload(native)
-
-
-def test_patch_havsfunc_missing_file_exits_cleanly():
-    """Exit successfully and print information when the target file is missing."""
-
-    with patch("modules.core.patch_havsfunc.os.path.exists", return_value=False):
-        with patch("modules.core.patch_havsfunc.sys.exit", side_effect=SystemExit(0)) as mock_exit:
-            with patch("builtins.print") as mock_print:
-                with pytest.raises(SystemExit):
-                    patch_havsfunc.main()
-
-    mock_exit.assert_called_once_with(0)
-    assert mock_print.called
-
-
-def test_patch_havsfunc_applies_replacements_and_writes():
-    """Apply text replacements and write patched havsfunc content."""
-
-    original = (
-        "vs.get_core()\n"
-        "f(a, _global = x)\n"
-        "g(a, _lambda = y)\n"
-        "def QTGMC(opencl=False):\n"
-        "    return 1\n"
-        "def QTGMC_Interpolate(opencl=False):\n"
-        "    myNNEDI3 = core.nnedi3cl.NNEDI3CL\n"
-        "    tmp = 0\n"
-        "    myEEDI3 = core.eedi3m.EEDI3CL\n"
-        "def helper(a, opencl):\n"
-        "    return TFF, opencl)\n"
-        "def helper2():\n"
-        "    return TFF=TFF, opencl=opencl)\n"
-        "def helper3():\n"
-        "    return MatchEnhance, TFF, opencl)\n"
-        "myNNEDI3 = core.nnedi3cl.NNEDI3CL\n"
-        "myEEDI3 = core.eedi3m.EEDI3CL\n"
-    )
-
-    m_open = mock_open(read_data=original)
-
-    with patch("modules.core.patch_havsfunc.os.path.exists", return_value=True):
-        with patch("builtins.open", m_open):
-            with patch("builtins.print"):
-                patch_havsfunc.main()
-
-    written = "".join(call.args[0] for call in m_open().write.call_args_list)
-    assert "vs.core" in written
-    assert "_global" not in written
-    assert "_lambda" not in written
-    assert "device=0" in written
-    assert "functools.partial(core.nnedi3cl.NNEDI3CL, device=device)" in written
-
-
-def test_patch_havsfunc_replace_helpers_cover_warning_and_required_paths():
-    """Cover helper replacement warning and required-error paths."""
-
-    updated, count = getattr(patch_havsfunc, "_replace_text")("foo", "demo", "foo", "bar")
-    assert updated == "bar"
-    assert count == 1
-
-    with patch("builtins.print") as mock_print:
-        unchanged, count = getattr(patch_havsfunc, "_replace_text")("foo", "missing", "zzz", "bar")
-    assert unchanged == "foo"
-    assert count == 0
-    assert mock_print.called
-
-    with pytest.raises(RuntimeError):
-        getattr(patch_havsfunc, "_replace_text")("foo", "required", "zzz", "bar", required=True)
-
-    updated_regex, count_regex = getattr(patch_havsfunc, "_replace_regex")("ab12", "rx", r"\d+", "")
-    assert updated_regex == "ab"
-    assert count_regex == 1
-
-    with patch("builtins.print") as mock_print:
-        unchanged_regex, count_regex = getattr(patch_havsfunc, "_replace_regex")("ab", "missing_rx", r"\d+", "")
-    assert unchanged_regex == "ab"
-    assert count_regex == 0
-    assert mock_print.called
-
-    with pytest.raises(RuntimeError):
-        getattr(patch_havsfunc, "_replace_regex")("ab", "required_rx", r"\d+", "", required=True)
-
-
-def test_patch_havsfunc_handles_multiline_docstring_and_future_import_insertion():
-    """Insert functools import after a module docstring and future imports."""
-
-    original = (
-        "#!/usr/bin/env python\n"
-        '"""module doc\n'
-        "still doc\n"
-        '"""\n'
-        "from __future__ import annotations\n"
-        "vs.get_core()\n"
-        "def QTGMC(opencl=False):\n"
-        "    return 1\n"
-    )
-
-    m_open = mock_open(read_data=original)
-    with patch("modules.core.patch_havsfunc.os.path.exists", return_value=True):
-        with patch("builtins.open", m_open):
-            with patch("builtins.print"):
-                patch_havsfunc.main()
-
-    written = "".join(call.args[0] for call in m_open().write.call_args_list)
-    assert "import functools" in written
-    assert written.index("from __future__ import annotations") < written.index("import functools")
-
-
-def test_patch_havsfunc_skips_legacy_block_when_device_already_present():
-    """Skip legacy patch section when device argument already exists."""
-
-    original = "import functools\ndef QTGMC(opencl=False, device=0):\n    return 1\n"
-
-    m_open = mock_open(read_data=original)
-    with patch("modules.core.patch_havsfunc.os.path.exists", return_value=True):
-        with patch("builtins.open", m_open):
-            with patch("builtins.print") as mock_print:
-                patch_havsfunc.main()
-
-    printed_messages = [call.args[0] for call in mock_print.call_args_list]
-    assert any("skipping legacy device patch block" in msg for msg in printed_messages)
-    assert any("Patched havsfunc.py" in msg for msg in printed_messages)
 
 
 def test_vspipe_native_main_usage_and_missing_script():
@@ -357,6 +242,24 @@ def test_vspipe_native_write_y4m_success_and_broken_pipe_path():
         with patch.object(native.sys, "exit", side_effect=SystemExit(1)):
             with pytest.raises(SystemExit):
                 getattr(native, "_write_y4m_output")(bad_clip, "YUV4MPEG2 header\n")
+
+
+def test_vspipe_native_log_frame_progress_uses_one_based_count():
+    """Log frame progress with one-based completed-frame numbers and flush when requested."""
+    fake_vs = SimpleNamespace(get_outputs=lambda: {}, VideoOutputTuple=tuple, VideoNode=object)
+    native = _load_vspipe_native(fake_vs)
+
+    flush = MagicMock()
+    with patch.object(native.sys, "stderr") as mock_stderr:
+        getattr(native, "_log_frame_progress")(99, 1000, flush_output=flush)
+
+    mock_stderr.write.assert_called_once_with("Wrote frame 100/1000\n")
+    flush.assert_called_once_with()
+
+    with patch.object(native.sys, "stderr") as mock_stderr:
+        getattr(native, "_log_frame_progress")(0, 1000)
+
+    mock_stderr.write.assert_not_called()
 
 
 def test_vspipe_native_write_all_handles_partial_writes():
@@ -597,7 +500,6 @@ def test_vspipe_native_import_fallback_without_msvcrt_or_numpy(monkeypatch):
     real_import = builtins.__import__
     importlib.invalidate_caches()
 
-    sys.modules.pop("modules.runtime.vspipe_native", None)
     sys.modules.pop("numpy", None)
 
     fake_vs_module = SimpleNamespace(
@@ -622,8 +524,11 @@ def test_vspipe_native_import_fallback_without_msvcrt_or_numpy(monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
-    module = importlib.import_module("modules.runtime.vspipe_native")
-    module = importlib.reload(module)
+    try:
+        module = importlib.import_module("modules.runtime.vspipe_native")
+        module = importlib.reload(module)
 
-    assert module.msvcrt is None
-    assert module.np is None
+        assert module.msvcrt is None
+        assert module.np is None
+    finally:
+        sys.modules.pop("modules.runtime.vspipe_native", None)

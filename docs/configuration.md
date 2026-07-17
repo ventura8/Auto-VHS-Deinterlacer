@@ -34,6 +34,8 @@ performance_profile: "auto"
 
 manual_settings:
   cpu_threads: 32
+  vspipe_prefetch_threads: "auto"
+  vspipe_requests: "auto"
 
 # Sync Logic
 auto_drift_correction: true  # Enabled by default
@@ -44,3 +46,6 @@ audio_sync_offset: 0.0       # Manual delay in seconds
 
 - **Loader**: `load_config()` uses PyYAML to parse the file safely.
 - **Fallbacks**: If keys are missing, the script defaults to hardcoded safe values (e.g., QTGMC, 16 threads).
+- **Throughput**: `vspipe_prefetch_threads` controls how many frames VapourSynth queues ahead.
+- **Auto Prefetch**: Set `vspipe_prefetch_threads: "auto"` to match `cpu_threads` for maximum queue depth and throughput.
+- **vspipe Requests**: `vspipe_requests` controls how many frame requests `vspipe` keeps in flight; `"auto"` uses `2x cpu_threads` (capped at 64).

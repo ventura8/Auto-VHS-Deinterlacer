@@ -1,8 +1,75 @@
 """Execution-path integration tests for pipeline happy flow and summaries."""
 
+import importlib
 import stat
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+
+def _collect_batch_summary_lines(ad, files, fake_results):
+    """Run main with fake batch results and return captured summary lines."""
+    with (
+        patch("modules.runtime.pipeline.setup_environment"),
+        patch("modules.runtime.pipeline.get_cpu_name", return_value="cpu"),
+        patch("modules.runtime.pipeline.get_gpu_name", return_value="gpu"),
+        patch("modules.runtime.pipeline._show_banner"),
+        patch("modules.runtime.pipeline.check_requirements"),
+        patch("modules.runtime.pipeline.get_input_files", return_value=files),
+        patch("modules.runtime.pipeline.process_video", side_effect=fake_results),
+        patch("modules.runtime.pipeline.log_info") as mock_log_info,
+        patch("sys.argv", ["script.py", "a.mp4"]),
+    ):
+        ad.main()
+
+    return [call.args[0] for call in mock_log_info.call_args_list if call.args]
+
+
+def _build_batch_summary_fixture():
+    """Return input files and result rows used by batch summary tests."""
+    files = [Path("a.mp4"), Path("b.mp4")]
+    fake_results = [
+        {
+            "input": files[0],
+            "output": Path("a_out.mov"),
+            "status": "success",
+            "elapsed_sec": 10.0,
+            "duration_sec": 20.0,
+            "speed_x": 2.0,
+        },
+        {
+            "input": files[1],
+            "output": Path("b_out.mov"),
+            "status": "failed",
+            "elapsed_sec": 20.0,
+            "duration_sec": 10.0,
+            "speed_x": 0.5,
+        },
+    ]
+    return files, fake_results
+
+
+def test_process_batch_appends_failed_row_for_exceptions(monkeypatch):
+    """Batch exceptions should still produce a failed result row."""
+    pipeline = importlib.import_module("modules.runtime.pipeline")
+    process_batch = getattr(pipeline, "_process_batch")
+    input_files = [Path("broken.mp4")]
+
+    monkeypatch.setattr(pipeline, "_log_batch_result", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pipeline, "process_video", MagicMock(side_effect=RuntimeError("boom")))
+    monkeypatch.setattr(pipeline, "log_error", MagicMock())
+
+    results = process_batch(input_files)
+
+    assert results == [
+        {
+            "input": input_files[0],
+            "output": None,
+            "status": "failed",
+            "elapsed_sec": results[0]["elapsed_sec"],
+            "duration_sec": 0.0,
+            "speed_x": None,
+        }
+    ]
 
 
 def test_process_video_happy_path_execution(ad):
@@ -66,43 +133,25 @@ def test_process_video_happy_path_execution(ad):
 
 
 def test_main_logs_batch_summary(ad):
-    """Batch runs should print a final aggregate summary."""
-    files = [Path("a.mp4"), Path("b.mp4")]
-    fake_results = [
-        {
-            "input": files[0],
-            "output": Path("a_out.mov"),
-            "status": "success",
-            "elapsed_sec": 10.0,
-            "duration_sec": 20.0,
-            "speed_x": 2.0,
-        },
-        {
-            "input": files[1],
-            "output": Path("b_out.mov"),
-            "status": "failed",
-            "elapsed_sec": 20.0,
-            "duration_sec": 10.0,
-            "speed_x": 0.5,
-        },
-    ]
+    """Batch runs should print aggregate summary counts and totals."""
+    files, fake_results = _build_batch_summary_fixture()
+    logged_output = "\n".join(_collect_batch_summary_lines(ad, files, fake_results))
+    assert "[BATCH SUMMARY]" in logged_output
+    assert "Success : 1" in logged_output
+    assert "Failed  : 1" in logged_output
 
-    with patch("modules.runtime.pipeline.setup_environment"):
-        with patch("modules.runtime.pipeline.get_cpu_name", return_value="cpu"):
-            with patch("modules.runtime.pipeline.get_gpu_name", return_value="gpu"):
-                with patch("modules.runtime.pipeline._show_banner"):
-                    with patch("modules.runtime.pipeline.check_requirements"):
-                        with patch("modules.runtime.pipeline.get_input_files", return_value=files):
-                            with patch("modules.runtime.pipeline.process_video", side_effect=fake_results):
-                                with patch("modules.runtime.pipeline.log_info") as mock_log_info:
-                                    with patch("sys.argv", ["script.py", "a.mp4"]):
-                                        ad.main()
 
-    logged_lines = [call.args[0] for call in mock_log_info.call_args_list if call.args]
-    assert any("[BATCH SUMMARY]" in line for line in logged_lines)
-    assert any("Success : 1" in line for line in logged_lines)
-    assert any("Failed  : 1" in line for line in logged_lines)
-    assert any("Speed   : 2.00x" in line for line in logged_lines)
-    assert any("Videos  :" in line for line in logged_lines)
-    assert any("a.mp4 -> SUCCESS (speed: 2.00x, output: a_out.mov)" in line for line in logged_lines)
-    assert any("b.mp4 -> FAILED (speed: 0.50x, output: b_out.mov)" in line for line in logged_lines)
+def test_main_logs_batch_summary_speed_section(ad):
+    """Batch summary should include speed and video section headings."""
+    files, fake_results = _build_batch_summary_fixture()
+    logged_output = "\n".join(_collect_batch_summary_lines(ad, files, fake_results))
+    assert "Speed   : 2.00x" in logged_output
+    assert "Videos  :" in logged_output
+
+
+def test_main_logs_batch_summary_video_rows(ad):
+    """Batch summary should include one formatted row per processed video."""
+    files, fake_results = _build_batch_summary_fixture()
+    logged_output = "\n".join(_collect_batch_summary_lines(ad, files, fake_results))
+    assert "a.mp4 -> SUCCESS (speed: 2.00x, output: a_out.mov)" in logged_output
+    assert "b.mp4 -> FAILED (speed: 0.50x, output: b_out.mov)" in logged_output

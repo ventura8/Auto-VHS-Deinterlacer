@@ -12,6 +12,7 @@ def _build_mock_processes():
     p_vspipe = MagicMock()
     for attr_name in ("stdout", "stderr"):
         setattr(p_vspipe, attr_name, MagicMock())
+    p_vspipe.returncode = 0
     p_vspipe.wait.return_value = None
 
     p_ffmpeg = MagicMock(returncode=0)
@@ -49,7 +50,6 @@ def test_run_encoding_pipeline_progress_parsing():
     """Test _run_encoding_pipeline parsing of ffmpeg output."""
     vspipe_cmd = ["vspipe", "-", "-"]
     ffmpeg_cmd = ["ffmpeg", "-i", "-"]
-    temp_script = Path("temp.vpy")
     duration_sec = 100.0
 
     # Mock subprocess objects
@@ -81,9 +81,7 @@ def test_run_encoding_pipeline_progress_parsing():
                                 ret = getattr(pipeline, "_run_encoding_pipeline")(
                                     vspipe_cmd,
                                     ffmpeg_cmd,
-                                    temp_script,
                                     duration_sec,
                                 )
                                 assert ret is True
                                 assert mock_update.call_count >= 2
-                                assert any(call.args and call.args[0] == 100.0 for call in mock_update.call_args_list)

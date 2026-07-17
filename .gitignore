@@ -35,6 +35,12 @@ test_full.vpy
 *.lwi
 dummy_ffmpeg.bat
 
+# Quality report artifacts
+assets/radon_summary.md
+assets/radon_mi_summary.md
+assets/radon_raw.txt
+assets/radon_hal.txt
+
 # Generated Launcher (created by install.ps1)
 start.bat
 
