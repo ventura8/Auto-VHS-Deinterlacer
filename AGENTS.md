@@ -1,40 +1,139 @@
 # Auto-VHS-Deinterlacer Agent Guide
 
-Use this repository as a Windows-first Python project with a strict validation workflow.
+Use this repository as a Windows-first Python project with a
+strict validation workflow.
+
+## Project Overview
+
+`Auto-VHS-Deinterlacer` is an automated, studio-grade video
+restoration pipeline for digitizing and restoring VHS captures.
+It orchestrates VapourSynth (QTGMC), FFmpeg, and optional ML
+models for audio separation, hardware-adaptive threading, and
+audio-video synchronization.
+
+- **Version single source of truth**: Pinned in `pyproject.toml`
+  (`[project].version`, currently `1.0.4`).
+- **Runtime Environment**: Windows-first on Python 3.12 (CPython
+  64-bit) with virtualenv located at `.VENV`.
 
 ## Working Rules
 
-- Prefer minimal edits that keep behavior stable.
-- Keep imports aligned with the current package split: `modules.core` and
-  `modules.runtime`.
-- Do not add lint suppressions, ignore comments, or compatibility shims unless
-  the user explicitly asks for them.
-- Use the workspace venv at `.VENV` for validation.
-- Treat lint as a gate before tests when making code changes.
+- **Strict package boundaries**:
+  - `modules.core`: Shared configuration, hardware detection,
+    logging, environment helpers, and `patch_havsfunc`
+    (documented setup-time patch exception).
+  - `modules.runtime`: Pipeline execution, process orchestration
+    (`vspipe`, `ffmpeg`), and fallback native frame streaming
+    (`vspipe_native`).
+  - `auto_deinterlancer.py`: CLI entrypoint and parameter
+    validation wrapper.
+- **No Suppressions Allowed**: Never add `# noqa`, `# pylint: disable`,
+  `# type: ignore`, or inline suppression comments. Fix issues
+  at the root.
+- **Coverage Invariant**: Maintain ≥90% line coverage
+  per-file and repository-wide across product code (`auto_deinterlancer.py`
+  and `modules/`) with branch coverage measurement enabled; CI/automation
+  scripts under `.github/scripts/` are validated via strict linters and metrics.
+- **Mocking Boundaries**: Mock only external boundaries (FFmpeg,
+  external VSPipe binary, hardware probing). Never mock owned code.
+- **Validation Interpreter**: Always use `.VENV\Scripts\python.exe`
+  for local checks and test runs.
 
-## Validation Order
+## Validation Order & Commands
 
-1. Run `./.github/scripts/run_powershell_lint.ps1 -RepoRoot (Get-Location)`
-   when touching PowerShell files.
-1. Run `$tomlFiles = git ls-files "*.toml";` then run
-   `.\.VENV\Scripts\python.exe -m poetry run taplo lint $tomlFiles`.
-1. Run `.\.VENV\Scripts\python.exe -m poetry run bandit -ll -r`
-   `auto_deinterlancer.py modules .github/scripts`.
-1. Run `.\.VENV\Scripts\python.exe -m poetry run pip-audit`.
-1. Run `.\.VENV\Scripts\python.exe -m poetry run black --check`
-   `auto_deinterlancer.py modules tests .github/scripts`.
-1. Run `.\.VENV\Scripts\python.exe -m poetry run isort --check-only`
-   `auto_deinterlancer.py modules tests .github/scripts`.
-1. Run `.\.VENV\Scripts\python.exe -m ruff check .`.
-1. Run `.\.VENV\Scripts\python.exe -m flake8 .`.
-1. Run `.\.VENV\Scripts\python.exe -m pylint auto_deinterlancer.py`
-   `modules .github/scripts`.
-1. Run `.\.VENV\Scripts\python.exe -m pytest -o addopts=` for focused checks,
-   or the full suite when the change is broad.
+1. **PowerShell Linting**:
 
-## Repo Map
+   ```powershell
+   .\.github\scripts\run_powershell_lint.ps1 -RepoRoot (Get-Location)
+   ```
 
-- [Architecture overview](.agent/architecture.md)
-- [Setup guide](.agent/setup.md)
-- [Validation guide](.agent/validation.md)
-- [Lint workflow](.agent/workflows/fix-lints.md)
+1. **TOML Linting**:
+
+   ```powershell
+   $toml = git ls-files "*.toml"
+   .\.VENV\Scripts\python.exe -m poetry run taplo lint $toml
+   ```
+
+1. **Security & Dependency Scans**:
+
+   ```powershell
+   .\.VENV\Scripts\python.exe -m poetry run bandit -ll -r auto_deinterlancer.py modules .github/scripts
+   .\.VENV\Scripts\python.exe -m poetry run pip-audit
+   ```
+
+1. **Code Formatting Checks**:
+
+   ```powershell
+   .\.VENV\Scripts\python.exe -m poetry run black --check auto_deinterlancer.py modules tests .github/scripts
+   .\.VENV\Scripts\python.exe -m poetry run isort --check-only auto_deinterlancer.py modules tests .github/scripts
+   ```
+
+1. **Static Code Analysis**:
+
+   ```powershell
+   .\.VENV\Scripts\python.exe -m ruff check .
+   .\.VENV\Scripts\python.exe -m flake8 .
+   .\.VENV\Scripts\python.exe -m pylint auto_deinterlancer.py modules .github/scripts
+   ```
+
+1. **Code Metrics**:
+
+   ```powershell
+   .\.VENV\Scripts\python.exe -m poetry run python .github/scripts/enforce_radon_grade.py --summary-out assets/radon_summary.md
+   .\.VENV\Scripts\python.exe -m poetry run python .github/scripts/enforce_radon_grade.py --metric mi --summary-out assets/radon_mi_summary.md
+   ```
+
+1. **Markdown Validation**:
+
+   ```powershell
+   $mdFiles = git ls-files "*.md"
+   .\.VENV\Scripts\python.exe -m poetry run mdformat --check $mdFiles
+   .\.VENV\Scripts\python.exe -m poetry run pymarkdown -d MD013 scan .
+   ```
+
+1. **Tests & Coverage Gates**:
+
+   ```powershell
+   $prevSkipHw = $env:AUTO_VHS_SKIP_HW_DETECT
+   $env:AUTO_VHS_SKIP_HW_DETECT = "1"
+   try {
+       .\.VENV\Scripts\python.exe -m pytest --cov=modules --cov=auto_deinterlancer --cov-branch --cov-report=xml:assets/coverage.xml --cov-report=term --cov-fail-under=90 tests/
+       if ($LASTEXITCODE -ne 0) {
+           throw "Pytest failed with exit code $LASTEXITCODE"
+       }
+   }
+   finally {
+       if ($null -ne $prevSkipHw) { $env:AUTO_VHS_SKIP_HW_DETECT = $prevSkipHw } else { Remove-Item Env:AUTO_VHS_SKIP_HW_DETECT -ErrorAction SilentlyContinue }
+   }
+   .\.VENV\Scripts\python.exe -m poetry run python .github/scripts/enforce_per_file_coverage.py assets/coverage.xml 90
+   .\.VENV\Scripts\python.exe -m poetry run genbadge coverage -i assets/coverage.xml -o assets/coverage.svg
+   ```
+
+1. **Full Automated Local Pipeline**:
+
+   ```powershell
+   .\run_pipeline_localy.ps1
+   ```
+
+## Skills Index
+
+The workspace provides on-demand agent skills in `.agents/skills/`:
+
+| Skill | Description | Location |
+| :--- | :--- | :--- |
+| **`code-linter`** | Strict linting, formatting, metrics, and zero-suppression checks | [`.agents/skills/code-linter/SKILL.md`](.agents/skills/code-linter/SKILL.md) |
+| **`pipeline-runner`** | Local CI-parity validation pipeline runner and coverage badge sync | [`.agents/skills/pipeline-runner/SKILL.md`](.agents/skills/pipeline-runner/SKILL.md) |
+| **`test-runner`** | Pytest unit, integration, and native test runner with ≥90% coverage enforcement | [`.agents/skills/test-runner/SKILL.md`](.agents/skills/test-runner/SKILL.md) |
+| **`installer-tester`** | PowerShell setup and environment installation validation | [`.agents/skills/installer-tester/SKILL.md`](.agents/skills/installer-tester/SKILL.md) |
+| **`release`** | Version bump, release notes generation, and release checklist | [`.agents/skills/release/SKILL.md`](.agents/skills/release/SKILL.md) |
+| **`resolve-pr-comments`** | Resolving GitHub PR review comments with reply-before-resolve discipline | [`.agents/skills/resolve-pr-comments/SKILL.md`](.agents/skills/resolve-pr-comments/SKILL.md) |
+| **`review-with-coderabbit`** | CodeRabbit review and findings triage on local changes | [`.agents/skills/review-with-coderabbit/SKILL.md`](.agents/skills/review-with-coderabbit/SKILL.md) |
+| **`vapoursynth-pipeline-verifier`** | Verification of VapourSynth scripts, QTGMC presets, and havsfunc patches | [`.agents/skills/vapoursynth-pipeline-verifier/SKILL.md`](.agents/skills/vapoursynth-pipeline-verifier/SKILL.md) |
+
+## Repository Map
+
+- [Architecture Overview](.agent/architecture.md)
+- [Setup Guide](.agent/setup.md)
+- [Validation Guide](.agent/validation.md)
+- [Lint Workflow](.agent/workflows/fix-lints.md)
+- [Agent Instructions](.agent/Instructions.md)

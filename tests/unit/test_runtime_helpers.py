@@ -3,6 +3,7 @@
 import importlib
 import runpy
 import signal
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -258,3 +259,32 @@ def test_get_cpu_name_falls_back_to_platform_processor():
     with patch("modules.core.utils.winreg", fake_winreg):
         with patch("modules.core.utils.platform.processor", return_value="Fallback CPU"):
             assert utils.get_cpu_name() == "Fallback CPU"
+
+
+def _assert_file_safe_from_unquoted_batch_injection(path):
+    content = path.read_text(encoding="utf-8")
+    assert "%*" not in content
+    assert '"%~1"' in content
+
+
+def test_start_bat_script_quotes_arguments():
+    """Verify that start.bat (if generated) and install.ps1 do not execute unquoted %* command injection."""
+    utils = importlib.import_module("modules.core.utils")
+    root = Path(utils.get_project_root())
+
+    start_bat = root / "start.bat"
+    if start_bat.exists():
+        _assert_file_safe_from_unquoted_batch_injection(start_bat)
+    _assert_file_safe_from_unquoted_batch_injection(root / "install.ps1")
+
+
+def test_install_ps1_verifies_download_hashes():
+    """Verify that install.ps1 contains SHA256 integrity verification for downloads."""
+    utils = importlib.import_module("modules.core.utils")
+    root = Path(utils.get_project_root())
+    install_ps1_content = (root / "install.ps1").read_text(encoding="utf-8")
+
+    assert "$sevenZipExpectedSha256" in install_ps1_content
+    assert "$havsfuncExpectedSha256" in install_ps1_content
+    assert "$ffmpegExpectedSha256" in install_ps1_content
+    assert "Get-FileHash" in install_ps1_content

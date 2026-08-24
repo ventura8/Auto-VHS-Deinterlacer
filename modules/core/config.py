@@ -184,6 +184,38 @@ def _resolve_cpu_threads(raw_value):
     _reject_invalid_cpu_threads("ERROR: manual_settings.cpu_threads must be a positive integer or 'auto'.")
 
 
+def _reject_invalid_ram_cache_mb(message) -> NoReturn:
+    """Abort configuration loading when ram_cache_mb is invalid."""
+    log_error(message)
+    sys.exit(1)
+
+
+def _parse_ram_cache_mb_from_string(raw_value):
+    """Parse ram_cache_mb from string."""
+    try:
+        return int(raw_value.strip())
+    except ValueError:
+        _reject_invalid_ram_cache_mb("ERROR: manual_settings.ram_cache_mb must be a positive integer.")
+
+
+def _validate_ram_cache_mb(parsed):
+    """Ensure ram_cache_mb is at least 128 MB."""
+    if parsed < 128:
+        _reject_invalid_ram_cache_mb("ERROR: manual_settings.ram_cache_mb must be >= 128 MB.")
+    return parsed
+
+
+def _resolve_ram_cache_mb(raw_value):
+    """Normalize ram_cache_mb from config into a valid positive integer."""
+    if isinstance(raw_value, str):
+        return _validate_ram_cache_mb(_parse_ram_cache_mb_from_string(raw_value))
+
+    if _is_non_bool_int(raw_value):
+        return _validate_ram_cache_mb(raw_value)
+
+    _reject_invalid_ram_cache_mb("ERROR: manual_settings.ram_cache_mb must be a positive integer.")
+
+
 # HARDWARE DETECTION & OPTIMIZATION
 def detect_hardware_settings():
     """Detect and build runtime hardware settings used by the pipeline."""
@@ -206,6 +238,7 @@ def detect_hardware_settings():
             sys.exit(1)
         settings.update(manual)
         settings["cpu_threads"] = _resolve_cpu_threads(settings.get("cpu_threads", "auto"))
+        settings["ram_cache_mb"] = _resolve_ram_cache_mb(settings.get("ram_cache_mb", 4000))
         log_info("Processing Profile: MANUAL")
     else:
         # Auto-Detect

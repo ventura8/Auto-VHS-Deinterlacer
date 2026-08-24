@@ -172,8 +172,10 @@ def _get_portable_site_packages_path(venv_root: str) -> str:
 
 def _append_runtime_settings(lines, current_settings):
     """Append thread and cache settings to the generated VPY script."""
-    lines.append(f"core.num_threads = {current_settings['cpu_threads']}")
-    lines.append(f"core.max_cache_size = {current_settings['ram_cache_mb']}\n")
+    num_threads = int(current_settings["cpu_threads"])
+    max_cache_size = int(current_settings["ram_cache_mb"])
+    lines.append(f"core.num_threads = {num_threads}")
+    lines.append(f"core.max_cache_size = {max_cache_size}\n")
 
 
 def _resolve_fps_logic(safe_input):

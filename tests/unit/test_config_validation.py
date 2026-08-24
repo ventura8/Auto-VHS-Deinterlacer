@@ -75,6 +75,31 @@ def test_detect_hardware_manual_profile_invalid_settings(ad):
                 assert mock_exit.called
 
 
+def test_detect_hardware_manual_profile_ram_cache_mb_valid(ad):
+    """Manual ram_cache_mb string and int should normalize to integer."""
+    with patch("modules.core.config.PERF_PROFILE", "manual"):
+        with patch("modules.core.config.CONFIG", {"manual_settings": {"ram_cache_mb": "8192"}}):
+            settings = ad.detect_hardware_settings()
+            assert settings["ram_cache_mb"] == 8192
+
+
+def test_detect_hardware_manual_profile_ram_cache_mb_invalid(ad):
+    """Manual ram_cache_mb should reject non-integers, low values, and injections."""
+    with patch("modules.core.config.PERF_PROFILE", "manual"):
+        with patch("modules.core.config.CONFIG", {"manual_settings": {"ram_cache_mb": "4000\nimport os; os.system('calc')"}}):
+            with patch("modules.core.config.sys.exit", side_effect=SystemExit(1)) as mock_exit:
+                with pytest.raises(SystemExit):
+                    ad.detect_hardware_settings()
+                assert mock_exit.called
+
+    with patch("modules.core.config.PERF_PROFILE", "manual"):
+        with patch("modules.core.config.CONFIG", {"manual_settings": {"ram_cache_mb": 50}}):
+            with patch("modules.core.config.sys.exit", side_effect=SystemExit(1)) as mock_exit:
+                with pytest.raises(SystemExit):
+                    ad.detect_hardware_settings()
+                assert mock_exit.called
+
+
 def test_detect_hardware_ram_fail():
     """Test RAM detection exception."""
     mock_ctypes = MagicMock()
