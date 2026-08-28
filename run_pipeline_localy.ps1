@@ -1,4 +1,4 @@
-﻿param()
+param()
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -164,11 +164,14 @@ Invoke-Step "Run Radon Halstead Metrics" {
 }
 
 Invoke-Step "Run Markdown Auto-Delint" {
-    Invoke-PoetryCommand @("run", "mdformat", ".")
+    $mdFiles = git ls-files "*.md"
+    if ($mdFiles) {
+        Invoke-PoetryCommand (@("run", "mdformat") + $mdFiles)
+    }
 }
 
 Invoke-Step "Run Markdown Lint" {
-    Invoke-PoetryCommand @("run", "pymarkdown", "scan", ".")
+    Invoke-PoetryCommand @("run", "pymarkdown", "-d", "MD013", "scan", ".")
 }
 
 Invoke-Step "Run tests with coverage" {

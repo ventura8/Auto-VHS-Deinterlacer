@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Stop"
 $InstallFailed = $false
 
 function Initialize-VsRepo7Zip {
@@ -25,6 +25,7 @@ function Initialize-VsRepo7Zip {
     }
 
     $sevenZipUrl = "https://www.7-zip.org/a/7za920.zip"
+    $sevenZipExpectedSha256 = "2A3AFE19C180F8373FA02FF00254D5394FEC0349F5804E0AD2F6067854FF28AC"
     $tempRoot = Join-Path $env:TEMP ("auto-vhs-7zip-" + [guid]::NewGuid().ToString("N"))
     $tempZipPath = Join-Path $tempRoot "7za920.zip"
     $tempExtractPath = Join-Path $tempRoot "extract"
@@ -33,6 +34,12 @@ function Initialize-VsRepo7Zip {
         Write-Output "   -> 7z.exe not found. Bootstrapping standalone 7-Zip..."
         New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
         Invoke-WebRequest -Uri $sevenZipUrl -OutFile $tempZipPath
+        
+        $downloadedHash = (Get-FileHash -Path $tempZipPath -Algorithm SHA256).Hash
+        if ($downloadedHash -ne $sevenZipExpectedSha256) {
+            throw "7-Zip SHA256 integrity check failed. Expected: $sevenZipExpectedSha256, got: $downloadedHash"
+        }
+
         Expand-Archive -Path $tempZipPath -DestinationPath $tempExtractPath -Force
 
         $standalone7Zip = Join-Path $tempExtractPath "7za.exe"
@@ -201,9 +208,17 @@ try {
 
     # [FIX] We use a specific havsfunc r33 script for QTGMC compatibility.
     # We download it directly instead of using pip to avoid pulling unnecessary/failing dependencies.
-    Write-Output "[INFO] Setting up havsfunc r33 script..."
+    Write-Output "[INFO] Setting up havsfunc r33 script with integrity verification..."
+    $havsfuncExpectedSha256 = "4DA2839544B1CE9382DB670B069DC358228251D147DAD91F740A860840E04924"
+    $havsfuncDest = "$venvPath\Lib\site-packages\havsfunc.py"
     if (Test-Path "$venvPath\Lib\site-packages\havsfunc") { Remove-Item "$venvPath\Lib\site-packages\havsfunc" -Recurse -Force }
-    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/HomeOfVapourSynthEvolution/havsfunc/r33/havsfunc.py" -OutFile "$venvPath\Lib\site-packages\havsfunc.py"
+    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/HomeOfVapourSynthEvolution/havsfunc/r33/havsfunc.py" -OutFile $havsfuncDest
+    
+    $havsfuncDownloadedHash = (Get-FileHash -Path $havsfuncDest -Algorithm SHA256).Hash
+    if ($havsfuncDownloadedHash -ne $havsfuncExpectedSha256) {
+        Remove-Item -Path $havsfuncDest -Force -ErrorAction SilentlyContinue
+        throw "havsfunc.py SHA256 integrity check failed. Expected: $havsfuncExpectedSha256, got: $havsfuncDownloadedHash"
+    }
 
     # [FIX] Patch havsfunc for VapourSynth API compatibility
     # The r33 script uses vs.get_core() which is deprecated
@@ -214,7 +229,7 @@ try {
     }
 }
 catch {
-    Write-Output "[ERROR] Failed to install dependencies."
+    Write-Output "[ERROR] Failed to install dependencies: $_"
     $InstallFailed = $true
 }
 
@@ -225,16 +240,23 @@ Write-Output "=================================================="
 # ==============================================================================
 $ffmpegDest = "$venvPath\Scripts\ffmpeg.exe"
 if (-not (Test-Path $ffmpegDest)) {
-    Write-Output "[INFO] FFmpeg not found in .venv. Downloading typical static build..."
-    $ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+    Write-Output "[INFO] FFmpeg not found in .venv. Downloading static build with integrity verification..."
+    $ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.1-essentials_build.zip"
+    $ffmpegExpectedSha256 = "FEC81AE03971D9DD4BE3EBE02E263BD2EC1D789483F931BDBA5F5715E65DA2E9"
     $zipPath = Join-Path $PSScriptRoot "ffmpeg.zip"
     $extractPath = Join-Path $PSScriptRoot "ffmpeg_temp"
 
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Write-Output "   -> Downloading FFmpeg package..."
         Invoke-WebRequest -Uri $ffmpegUrl -OutFile $zipPath -UseBasicParsing
 
-        Write-Output "   -> Extracting..."
+        $downloadedSha256 = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash
+        if ($downloadedSha256 -ne $ffmpegExpectedSha256) {
+            throw "FFmpeg SHA256 checksum mismatch! Expected: $ffmpegExpectedSha256, got: $downloadedSha256"
+        }
+
+        Write-Output "   -> SHA256 verified successfully. Extracting..."
         Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
 
         $binPath = Get-ChildItem -Path $extractPath -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
@@ -242,7 +264,7 @@ if (-not (Test-Path $ffmpegDest)) {
             $sourceDir = $binPath.DirectoryName
             Copy-Item -Path "$sourceDir\ffmpeg.exe" -Destination "$venvPath\Scripts\" -Force
             Copy-Item -Path "$sourceDir\ffprobe.exe" -Destination "$venvPath\Scripts\" -Force
-            Write-Output "   -> FFmpeg installed to .venv/Scripts/ (Self-Contained)"
+            Write-Output "   -> FFmpeg installed to .venv/Scripts/ (Self-Contained & Verified)"
         }
         else {
             throw "Could not find ffmpeg.exe in extracted archive."
@@ -646,6 +668,7 @@ Write-Output "=================================================="
 Write-Output "Generating launcher: start.bat..."
 $batchContent = @"
 @echo off
+setlocal
 cd /d "%~dp0"
 
 if not exist ".venv\Scripts\python.exe" (
@@ -656,8 +679,16 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo Starting Auto-VHS-Deinterlacer...
-REM %* passes all arguments (dragged files) to the script
-".venv\Scripts\python.exe" auto_deinterlancer.py %*
+REM Safely forward all drag-and-drop arguments with strict parameter quoting
+set "CMD_ARGS="
+:loop_args
+if "%~1"=="" goto run_app
+set CMD_ARGS=%CMD_ARGS% "%~1"
+shift
+goto loop_args
+
+:run_app
+".venv\Scripts\python.exe" auto_deinterlancer.py %CMD_ARGS%
 
 if %errorlevel% neq 0 (
     echo.

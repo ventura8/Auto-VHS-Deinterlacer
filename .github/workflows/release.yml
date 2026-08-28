@@ -1,0 +1,66 @@
+name: Release
+
+# Trigger on version tags like v1.0.0, v1.2.3, etc.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  github-release:
+    name: "🚀 Publish GitHub Release"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag matches pyproject.toml version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          TOML_VERSION=$(grep -m 1 '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "Tag version  : ${TAG_VERSION}"
+          echo "TOML version : ${TOML_VERSION}"
+          if [ "${TAG_VERSION}" != "${TOML_VERSION}" ]; then
+            echo "::error::Tag version (${TAG_VERSION}) does not match pyproject.toml version (${TOML_VERSION})."
+            exit 1
+          fi
+          echo "VERSION=${TAG_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Load release notes body
+        id: notes
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          BODY_FILE="docs/releases/v${TAG_VERSION}_github_description.md"
+          echo "version=${TAG_VERSION}" >> "$GITHUB_OUTPUT"
+          if [ -f "${BODY_FILE}" ]; then
+            echo "use_body=true" >> "$GITHUB_OUTPUT"
+            echo "body_file=${BODY_FILE}" >> "$GITHUB_OUTPUT"
+          else
+            echo "use_body=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release (authored notes)
+        if: steps.notes.outputs.use_body == 'true'
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          body_path: ${{ steps.notes.outputs.body_file }}
+          draft: false
+          prerelease: false
+          make_latest: true
+
+      - name: Create GitHub Release (generated notes fallback)
+        if: steps.notes.outputs.use_body == 'false'
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          make_latest: true

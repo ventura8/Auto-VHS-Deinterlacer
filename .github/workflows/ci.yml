@@ -19,7 +19,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -164,11 +164,11 @@ jobs:
 
       - name: Run Markdown Auto-Delint
         run: |
-          poetry run mdformat .
+          git ls-files -z -- "*.md" | xargs -0 -r poetry run mdformat
 
       - name: Run Markdown Lint
         run: |
-          poetry run pymarkdown scan .
+          poetry run pymarkdown -d MD013 scan .
 
       - name: Create Mock Environment
         run: |

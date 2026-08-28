@@ -10,12 +10,12 @@ Status: pass, all analyzed files are grade A.
 | auto_deinterlancer.py | A | 72.67 |
 | modules/__init__.py | A | 100.00 |
 | modules/core/__init__.py | A | 100.00 |
-| modules/core/config.py | A | 46.66 |
+| modules/core/config.py | A | 44.01 |
 | modules/core/patch_havsfunc.py | A | 20.09 |
 | modules/core/utils.py | A | 27.48 |
 | modules/runtime/__init__.py | A | 100.00 |
 | modules/runtime/pipeline.py | A | 19.60 |
-| modules/runtime/vspipe.py | A | 33.58 |
+| modules/runtime/vspipe.py | A | 33.47 |
 | modules/runtime/vspipe_native.py | A | 29.15 |
 | tests/conftest.py | A | 83.30 |
 | tests/integration/test_auto_deinterlancer.py | A | 32.88 |
@@ -28,7 +28,7 @@ Status: pass, all analyzed files are grade A.
 | tests/integration/test_sync_logic.py | A | 60.67 |
 | tests/native/test_native_modules.py | A | 26.09 |
 | tests/native/test_patch_havsfunc.py | A | 31.85 |
-| tests/unit/test_config_validation.py | A | 40.22 |
+| tests/unit/test_config_validation.py | A | 38.39 |
 | tests/unit/test_generate_coverage_summary.py | A | 54.83 |
 | tests/unit/test_progress_reporting.py | A | 86.35 |
-| tests/unit/test_runtime_helpers.py | A | 28.33 |
+| tests/unit/test_runtime_helpers.py | A | 25.05 |
