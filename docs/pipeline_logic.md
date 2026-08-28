@@ -10,7 +10,8 @@ Before processing begins, the script:
 1. **Checks RAM**: Uses `GlobalMemoryStatusEx` to detect system RAM.
    - **High-Performance Profile**: If RAM > 48GB, allocates 50% for cache.
    - **Mid/Standard Profile**: If RAM > 24GB, allocates 35% for cache.
-1. **Checks GPU**: Scans for `nvidia-smi` to enable OpenCL/NVENC acceleration.
+1. **Checks GPU**: Scans for `nvidia-smi`, verifies the VapourSynth OpenCL QTGMC
+   plugins, and performs a one-frame FFmpeg AV1 NVENC probe before enabling NVENC.
 
 ## Step 2: Single-Pass Analysis & Processing
 
@@ -33,7 +34,8 @@ The pipeline executes a **single** consolidated command:
 - **Audio Flow**: Source audio is read, and `atempo` filters are applied on-the-fly if drift correction is needed.
 - **Encoding**:
   - **ProRes**: Encodes to ProRes 422 HQ (10-bit).
-  - **AV1**: Transcodes to SVT-AV1 or NVENC AV1.
+  - **AV1**: Transcodes with NVENC AV1 only when the probe succeeds; otherwise it
+    uses CPU-based SVT-AV1.
 
 ## Step 3: Robustness & Cleanup
 

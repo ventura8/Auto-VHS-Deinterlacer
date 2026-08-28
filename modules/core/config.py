@@ -7,7 +7,14 @@ from typing import NoReturn
 
 import yaml
 
-from modules.core.utils import get_nvidia_gpu_info, get_project_root, log_error, log_info
+from modules.core.utils import (
+    get_nvidia_gpu_info,
+    get_project_root,
+    has_av1_nvenc_capability,
+    log_error,
+    log_info,
+    vapoursynth_has_opencl_qtgmc,
+)
 
 # ==============================================================================
 #  CONFIGURATION & HARDWARE
@@ -76,10 +83,52 @@ def _get_ram_cache_mb(total_ram_gb):
     return max(cache_mb, 2000)
 
 
-def _detect_ram_settings(settings):
-    """Detects system RAM and updates cache settings."""
+def _get_posix_sysconf_ram_gb() -> float | None:
+    """Read physical RAM in GB via os.sysconf."""
     try:
-        kernel32 = ctypes.windll.kernel32
+        pages = os.sysconf("SC_PHYS_PAGES")
+        size = os.sysconf("SC_PAGE_SIZE")
+        if pages <= 0 or size <= 0:
+            return None
+        return (pages * size) / (1024**3)
+    except (AttributeError, ValueError, OSError, TypeError):
+        return None
+
+
+def _parse_meminfo_line(line: str) -> float | None:
+    """Parse MemTotal line from /proc/meminfo into GB."""
+    if not line.startswith("MemTotal:"):
+        return None
+    parts = line.split()
+    return (float(parts[1]) * 1024) / (1024**3) if len(parts) >= 2 else None
+
+
+def _get_proc_meminfo_ram_gb() -> float | None:
+    """Read physical RAM in GB via /proc/meminfo."""
+    if not os.path.exists("/proc/meminfo"):
+        return None
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                val = _parse_meminfo_line(line)
+                if val is not None:
+                    return val
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _get_posix_ram_gb() -> float | None:
+    """Read total physical RAM in GB on POSIX systems (Linux/macOS)."""
+    return _get_posix_sysconf_ram_gb() or _get_proc_meminfo_ram_gb()
+
+
+def _get_windows_ram_gb() -> float | None:
+    """Read total physical RAM in GB on Windows using GlobalMemoryStatusEx."""
+    try:
+        kernel32 = getattr(ctypes, "windll", None)
+        if kernel32 is None or not hasattr(kernel32, "kernel32"):
+            return None
 
         class _MemoryStatusEx(ctypes.Structure):
             """Windows memory status structure for GlobalMemoryStatusEx."""
@@ -101,39 +150,113 @@ def _detect_ram_settings(settings):
                 self.dw_length = ctypes.sizeof(type(self))
 
         meminfo = _MemoryStatusEx()
-        if kernel32.GlobalMemoryStatusEx(ctypes.byref(meminfo)) == 0:
-            log_info("  > RAM: Unknown (Cache: 4000 MB default)")
-            return
-        total_ram_gb = meminfo.ull_total_phys / (1024**3)
+        if kernel32.kernel32.GlobalMemoryStatusEx(ctypes.byref(meminfo)) == 0:
+            return None
+        return meminfo.ull_total_phys / (1024**3)
+    except (AttributeError, OSError, ValueError):
+        return None
 
+
+def _resolve_detected_ram_gb() -> float | None:
+    """Resolve total system RAM across Windows and POSIX platforms."""
+    if sys.platform == "win32" or hasattr(ctypes, "windll"):
+        return _get_windows_ram_gb() or _get_posix_ram_gb()
+    return _get_posix_ram_gb() or _get_windows_ram_gb()
+
+
+def _detect_ram_settings(settings):
+    """Detects system RAM and updates cache settings across all platforms."""
+    total_ram_gb = _resolve_detected_ram_gb()
+    if total_ram_gb is not None and total_ram_gb > 0:
         settings["ram_cache_mb"] = _get_ram_cache_mb(total_ram_gb)
         log_info(f"  > RAM: {total_ram_gb:.1f} GB (Cache: {settings['ram_cache_mb']} MB)")
-    except (AttributeError, OSError, ValueError):
-        log_info("  > RAM: Unknown (Cache: 4000 MB default)")
+    else:
+        log_info(f"  > RAM: Unknown (Defaulting Cache to {settings['ram_cache_mb']} MB)")
+
+
+def _log_opencl_qtgmc_enabled(*, nvenc_combo):
+    """Log the QTGMC-on-OpenCL acceleration banner."""
+    if nvenc_combo:
+        log_info("  > GPU Acceleration: ENABLED (OpenCL for QTGMC + NVENC)")
+        return
+    log_info("  > GPU Acceleration: ENABLED (OpenCL for QTGMC)")
+    if ENCODER != "prores":
+        return
+    log_info("    [NOTE] Encoder is set to CPU-bound profile (ProRes).")
+    log_info("    Real-time speed may be limited by CPU.")
+    log_info("           To use NVIDIA NVENC, set 'encoder: av1' in config.yaml.")
+
+
+def _log_opencl_qtgmc_disabled(*, nvenc_only):
+    """Log the banner when the QTGMC OpenCL interpolators are unavailable."""
+    if nvenc_only:
+        log_info("  > GPU Acceleration: NVENC encode only (QTGMC runs on CPU).")
+    else:
+        log_info("  > GPU Acceleration: DISABLED (QTGMC runs on CPU).")
+    log_info("    [NOTE] The VapourSynth OpenCL QTGMC filter is unavailable or unstable;")
+    log_info("           QTGMC will use its safe CPU implementation.")
+
+
+def _log_av1_nvenc_fallback(*, has_nvidia, has_nvenc):
+    """Explain why an AV1 request is using the CPU encoder."""
+    if ENCODER != "av1" or has_nvenc:
+        return
+    if has_nvidia:
+        log_info("    [NOTE] AV1 NVENC is unavailable on this NVIDIA/FFmpeg/driver stack;")
+        log_info("           AV1 will use the CPU encoder (libsvtav1).")
+        return
+    log_info("    [NOTE] No NVIDIA AV1 NVENC device is available;")
+    log_info("           AV1 will use the CPU encoder (libsvtav1).")
+
+
+def _resolve_manual_opencl(settings):
+    """Honour a manual ``use_gpu_opencl`` only when the OpenCL plugins are present."""
+    if not settings.get("use_gpu_opencl", True):
+        return False
+    if vapoursynth_has_opencl_qtgmc(_qtgmc_requires_eedi3cl(), verify_runtime=True):
+        return True
+    log_info("  > [NOTE] manual_settings.use_gpu_opencl is true, but the VapourSynth OpenCL")
+    log_info("           plugins are unavailable; QTGMC will run on CPU.")
+    return False
+
+
+def _report_qtgmc_acceleration(opencl_qtgmc, *, has_nvenc):
+    """Log how QTGMC and the encoder will actually be accelerated."""
+    nvenc_combo = ENCODER == "av1" and has_nvenc
+    if opencl_qtgmc:
+        _log_opencl_qtgmc_enabled(nvenc_combo=nvenc_combo)
+    else:
+        _log_opencl_qtgmc_disabled(nvenc_only=nvenc_combo)
 
 
 def _detect_gpu_settings(settings):
     """Detects GPU presence and updates acceleration settings, prioritizing NVIDIA."""
+    opencl_qtgmc = vapoursynth_has_opencl_qtgmc(_qtgmc_requires_eedi3cl(), verify_runtime=True)
+    settings["use_gpu_opencl"] = opencl_qtgmc
+
     nvidia_index, gpu_name = get_nvidia_gpu_info()
     if nvidia_index is not None and gpu_name is not None:
         log_info(f"  > NVIDIA GPU Found (Index {nvidia_index}): {gpu_name}")
-        settings["use_gpu_opencl"] = True
         settings["has_nvidia"] = True
-        settings["has_av1_nvenc"] = True
+        settings["has_av1_nvenc"] = has_av1_nvenc_capability()
         settings["gpu_device_index"] = nvidia_index
-        if ENCODER == "av1":
-            log_info("  > GPU Acceleration: ENABLED (OpenCL + NVENC)")
-        else:
-            log_info("  > GPU Acceleration: ENABLED (OpenCL for QTGMC)")
-            log_info("    [NOTE] Encoder is set to CPU-bound profile (ProRes).")
-            log_info("    Real-time speed may be limited by CPU.")
-            log_info("           To use NVIDIA NVENC, set 'encoder: av1' in config.yaml.")
+        _report_qtgmc_acceleration(opencl_qtgmc, has_nvenc=settings["has_av1_nvenc"])
+        _log_av1_nvenc_fallback(has_nvidia=True, has_nvenc=settings["has_av1_nvenc"])
         return
 
     # Fallback if no NVIDIA or smi fails
     settings["has_nvidia"] = False
     settings["has_av1_nvenc"] = False
     settings["gpu_device_index"] = 0
+    _report_qtgmc_acceleration(opencl_qtgmc, has_nvenc=False)
+    _log_av1_nvenc_fallback(has_nvidia=False, has_nvenc=False)
+
+
+def _qtgmc_requires_eedi3cl():
+    """Return whether the configured QTGMC interpolation mode uses EEDI3CL."""
+    qtgmc_settings = CONFIG.get("qtgmc_settings", {})
+    edi_mode = qtgmc_settings.get("EdiMode", "nnedi3") if isinstance(qtgmc_settings, dict) else "nnedi3"
+    return str(edi_mode).lower() in {"eedi3", "eedi3+nnedi3"}
 
 
 def _reject_invalid_cpu_threads(message) -> NoReturn:
@@ -237,6 +360,7 @@ def detect_hardware_settings():
             log_error("ERROR: Invalid manual_settings in config. Must be a mapping.")
             sys.exit(1)
         settings.update(manual)
+        settings["use_gpu_opencl"] = _resolve_manual_opencl(settings)
         settings["cpu_threads"] = _resolve_cpu_threads(settings.get("cpu_threads", "auto"))
         settings["ram_cache_mb"] = _resolve_ram_cache_mb(settings.get("ram_cache_mb", 4000))
         log_info("Processing Profile: MANUAL")

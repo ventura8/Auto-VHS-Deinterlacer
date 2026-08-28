@@ -14,6 +14,7 @@ from modules.core.utils import (
     log_debug,
     log_error,
     log_info,
+    resolve_venv_root,
 )
 
 # ==============================================================================
@@ -89,7 +90,7 @@ def _append_vpy_path(lines, path_value):
 
 def _get_vpy_header(venv_root, portable_root, site_paths, current_root):
     """Generates the VPY script header with imports and paths."""
-    lines = ["import sys", "import os", f"sys.path.insert(0, {_to_python_path_literal(current_root)})"]
+    lines = ["import sys", "import os", "import hashlib", "import tempfile", f"sys.path.insert(0, {_to_python_path_literal(current_root)})"]
     for p in site_paths:
         lines.append(f"sys.path.append({_to_python_path_literal(p)})")
 
@@ -126,19 +127,139 @@ def _append_load_plugin(plugin_lines, plugin_path):
         plugin_lines.append(f"try: core.std.LoadPlugin({_to_python_path_literal(plugin_path)})\nexcept: pass")
 
 
+def _first_existing_plugin(plugin_dir: str, file_names: list[str]) -> str | None:
+    """Return the first plugin path that exists in a directory."""
+    for file_name in file_names:
+        candidate = os.path.join(plugin_dir, file_name)
+        if os.path.exists(candidate):
+            return candidate.replace("\\", "/")
+    return None
+
+
+def _resolve_plugin_stems(base_name: str) -> tuple[str, ...]:
+    """Resolve normalized stem and any known aliases for a plugin base name."""
+    stem = base_name.split(".")[0].lower().removeprefix("lib")
+    if stem == "lsmashsource":
+        return (stem, "vslsmashsource")
+    if stem == "removegrainvs":
+        return (stem, "removegrain")
+    return (stem,)
+
+
+def _generate_plugin_candidates(base_name: str) -> list[str]:
+    """Generate list of possible platform filename candidates for a plugin."""
+    stems = _resolve_plugin_stems(base_name)
+    candidates = [base_name]
+    for s in stems:
+        candidates.extend(
+            [
+                f"{s}.dll",
+                f"lib{s}.dll",
+                f"{s}.so",
+                f"lib{s}.so",
+                f"{s}.dylib",
+                f"lib{s}.dylib",
+            ]
+        )
+    return candidates
+
+
+def _generate_versioned_plugin_prefixes(base_name: str) -> tuple[str, ...]:
+    """Return ordered shared-library prefixes for versioned plugin filenames."""
+    stems = _resolve_plugin_stems(base_name)
+    return tuple(prefix for s in stems for prefix in (f"lib{s}.so.", f"{s}.so."))
+
+
+def _find_plugin_candidate(plugin_dir: str, base_name: str) -> str | None:
+    """Find the full path to a plugin file matching base name across platform extensions."""
+    return _first_existing_plugin(plugin_dir, _generate_plugin_candidates(base_name))
+
+
+def _get_plugin_search_dirs(venv_root: str) -> list[str]:
+    """Return ordered list of directories to search for VapourSynth plugins."""
+    dirs = [_resolve_vspipe_plugin_dir(venv_root)]
+    if sys.platform != "win32":
+        dirs.extend(
+            [
+                "/usr/lib/vapoursynth",
+                "/usr/lib/x86_64-linux-gnu/vapoursynth",
+                "/usr/lib/aarch64-linux-gnu/vapoursynth",
+                "/usr/local/lib/vapoursynth",
+                "/opt/homebrew/lib/vapoursynth",
+            ]
+        )
+    return [d for d in dirs if os.path.exists(d)]
+
+
+def _list_normalized_dir_entries(dir_path: str) -> set[str]:
+    """Return a directory's entry names in normalized case, empty when unreadable."""
+    try:
+        return {os.path.normcase(name) for name in os.listdir(dir_path)}
+    except OSError:
+        return set()
+
+
+def _find_exact_plugin_entry(entries: set[str], candidates: list[str]) -> str | None:
+    """Return the first exact candidate present in a normalized directory listing."""
+    for candidate in candidates:
+        if os.path.normcase(candidate) in entries:
+            return candidate
+    return None
+
+
+def _find_versioned_plugin_entry(entries: set[str], prefixes: tuple[str, ...]) -> str | None:
+    """Return the first versioned shared-library entry matching an ordered prefix."""
+    for prefix in prefixes:
+        for entry in sorted(entries):
+            if entry.startswith(os.path.normcase(prefix)):
+                return entry
+    return None
+
+
+def _find_plugin_in_dirs(search_dirs: list[str], plugin_name: str) -> str | None:
+    """Find the first matching plugin path across candidate search directories.
+
+    Each directory is listed once and matched against the generated candidates,
+    which avoids one stat call per candidate per directory. ``os.path.normcase``
+    keeps the Windows case-insensitive lookup that ``os.path.exists`` provided.
+    """
+    candidates = _generate_plugin_candidates(plugin_name)
+    versioned_prefixes = _generate_versioned_plugin_prefixes(plugin_name)
+    for p_dir in search_dirs:
+        entries = _list_normalized_dir_entries(p_dir)
+        plugin_entry = _find_exact_plugin_entry(entries, candidates)
+        if plugin_entry is None:
+            plugin_entry = _find_versioned_plugin_entry(entries, versioned_prefixes)
+        if plugin_entry:
+            return os.path.join(p_dir, plugin_entry).replace("\\", "/")
+    return None
+
+
+def _resolve_core_plugin_dir(venv_root: str) -> str | None:
+    """Return the first available portable VapourSynth core-plugin directory."""
+    core_root = os.path.join(venv_root, "vs")
+    for name in ("vs-coreplugins", "coreplugins"):
+        candidate = os.path.join(core_root, name)
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
 def _get_plugin_loading_lines(venv_root):
     """Generates plugin loading commands for the VPY script."""
-    plugin_dir = _resolve_vspipe_plugin_dir(venv_root)
+    search_dirs = _get_plugin_search_dirs(venv_root)
     plugin_lines = []
 
-    core_plugin_dir = os.path.join(venv_root, "vs", "coreplugins")
-    if os.path.exists(core_plugin_dir):
-        avs_compat = os.path.join(core_plugin_dir, "AvsCompat.dll").replace("\\", "/")
-        _append_load_plugin(plugin_lines, avs_compat)
+    core_plugin_dir = _resolve_core_plugin_dir(venv_root)
+    if core_plugin_dir:
+        avs_compat = _find_plugin_candidate(core_plugin_dir, "AvsCompat.dll")
+        if avs_compat:
+            _append_load_plugin(plugin_lines, avs_compat)
 
     for p_name in ESSENTIAL_PLUGINS:
-        p_path = os.path.join(plugin_dir, p_name).replace("\\", "/")
-        _append_load_plugin(plugin_lines, p_path)
+        p_path = _find_plugin_in_dirs(search_dirs, p_name)
+        if p_path:
+            _append_load_plugin(plugin_lines, p_path)
     return plugin_lines
 
 
@@ -166,6 +287,13 @@ def _get_portable_site_packages_path(venv_root: str) -> str:
     """Build the portable .VENV site-packages path from the active venv root."""
     venv_parent = os.path.dirname(venv_root)
     base_name = os.path.basename(venv_root).lower()
+    # Check Unix layout first if not on Windows
+    if sys.platform != "win32":
+        py_ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+        unix_path = os.path.join(venv_root, "lib", py_ver, "site-packages")
+        if os.path.exists(unix_path):
+            return unix_path.replace("\\", "/")
+
     portable_venv_root = os.path.join(venv_parent, ".VENV") if base_name == ".venv" else venv_root
     return os.path.join(portable_venv_root, "Lib", "site-packages").replace("\\", "/")
 
@@ -209,9 +337,15 @@ def _build_qtgmc_args(current_settings):
 def _append_qtgmc_fallback_body(lines, qtgmc_args):
     """Append QTGMC invocation and fallback behavior to the VPY script."""
     lines.append("qtgmc_args = " + str(qtgmc_args))
+    lines.append("def _run_bob_fallback(src_clip, args):")
+    lines.append("    tff_val = args.get('TFF', True)")
+    lines.append("    try:")
+    lines.append("        return haf.Bob(src_clip, 0, 0.5, tff_val)")
+    lines.append("    except Exception:")
+    lines.append("        return src_clip.std.SeparateFields(tff=tff_val).std.DoubleWeave(tff=tff_val)")
     lines.append("def _run_qtgmc_with_fallback(src_clip, args):")
     lines.append("    retry_args = dict(args)")
-    lines.append("    for _ in range(3):")
+    lines.append("    for _ in range(4):")
     lines.append("        try:")
     lines.append("            return haf.QTGMC(src_clip, **retry_args)")
     lines.append("        except TypeError as qtgmc_err:")
@@ -231,8 +365,18 @@ def _append_qtgmc_fallback_body(lines, qtgmc_args):
     lines.append("                retry_args['opencl'] = False")
     lines.append("                retry_args.pop('device', None)")
     lines.append("                continue")
-    lines.append("            raise")
-    lines.append("    return haf.QTGMC(src_clip, **retry_args)")
+    lines.append("            if 'fmtc' in err_text:")
+    lines.append("                retry_args = dict(retry_args)")
+    lines.append("                retry_args['SourceMatch'] = 0")
+    lines.append("                retry_args['Lossless'] = 0")
+    lines.append("                continue")
+    lines.append("            print(")
+    lines.append("                f'[QTGMC FALLBACK] QTGMC failed ({type(qtgmc_err).__name__}: {qtgmc_err}); '")
+    lines.append("                f'falling back to Bob - deinterlacing quality is degraded.',")
+    lines.append("                file=sys.stderr,")
+    lines.append("            )")
+    lines.append("            return _run_bob_fallback(src_clip, retry_args)")
+    lines.append("    return _run_bob_fallback(src_clip, retry_args)")
 
 
 def _get_prefetch_raw_value():
@@ -353,7 +497,7 @@ def create_vpy_script(input_file, output_script, _mode, override_settings=None):
     safe_input = os.path.abspath(input_file).replace("\\", "/").strip()
     current_root = os.getcwd().replace("\\", "/").strip()
     base_dir = get_project_root()
-    venv_root = os.path.join(base_dir, ".venv").replace("\\", "/")
+    venv_root = resolve_venv_root(base_dir).replace("\\", "/")
 
     site_paths = _get_vpy_site_paths(venv_root)
     portable_root = f"{venv_root}/vs"
@@ -367,8 +511,22 @@ def create_vpy_script(input_file, output_script, _mode, override_settings=None):
 
     fps_logic = _resolve_fps_logic(safe_input)
     fps_num, fps_den = (25, 1) if fps_logic == "pal" else (30000, 1001)
+    source_literal = _to_python_path_literal(safe_input)
 
-    lines.append(f"clip = core.ffms2.Source({_to_python_path_literal(safe_input)}, fpsnum={fps_num}, fpsden={fps_den})")
+    lines.append("ffms_cache_dir = os.path.join(tempfile.gettempdir(), 'auto-vhs-deinterlancer', 'ffms2')")
+    lines.append("os.makedirs(ffms_cache_dir, exist_ok=True)")
+    lines.append(f"_src_size = os.path.getsize({source_literal}) if os.path.exists({source_literal}) else 0")
+    lines.append(f"_src_mtime = os.path.getmtime({source_literal}) if os.path.exists({source_literal}) else 0")
+    lines.append(f'_cache_key = f"{{{source_literal}}}:{{_src_size}}:{{_src_mtime}}".encode("utf-8")')
+    lines.append("ffms_cache_file = os.path.join(ffms_cache_dir, hashlib.sha256(_cache_key).hexdigest() + '.ffindex')")
+    lines.append("if hasattr(core, 'ffms2'):")
+    lines.append(f"    clip = core.ffms2.Source({source_literal}, cachefile=ffms_cache_file, " f"fpsnum={fps_num}, fpsden={fps_den})")
+    lines.append("elif hasattr(core, 'lsmas'):")
+    lines.append(f"    clip = core.lsmas.LWLibavSource({_to_python_path_literal(safe_input)}, fpsnum={fps_num}, fpsden={fps_den})")
+    lines.append("elif hasattr(core, 'bs'):")
+    lines.append(f"    clip = core.bs.VideoSource({_to_python_path_literal(safe_input)}, fpsnum={fps_num}, fpsden={fps_den})")
+    lines.append("else:")
+    lines.append("    raise RuntimeError('No source filter available in VapourSynth (checked ffms2, lsmas, bs).')")
     lines.append("clip = core.resize.Point(clip, format=vs.YUV420P16)\n")
 
     qtgmc_args = _build_qtgmc_args(current_settings)

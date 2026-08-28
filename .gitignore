@@ -12,6 +12,7 @@ htmlcov/
 .env
 # Virtual Environments
 .venv/
+.VENV/
 .ci_venv/
 .venv_corrupt/
 .venv_locked/
@@ -30,10 +31,16 @@ temp_video_only.mkv
 *.log
 *.vpy
 auto_vhs_debug.txt
+windows_test_status.txt
 test_full.vpy
 *.ffindex
 *.lwi
 dummy_ffmpeg.bat
+
+# Local pipeline scratch (TMPDIR for run_pipeline_localy.sh; the e2e installer
+# test copies the repo into TMPDIR, so it must never live inside the worktree)
+.pipeline-tmp/
+.pytest-tmp/
 
 # Quality report artifacts
 assets/radon_summary.md

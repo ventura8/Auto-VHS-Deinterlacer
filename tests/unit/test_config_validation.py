@@ -1,7 +1,6 @@
 """Unit tests for config validation and hardware-detection edge cases."""
 
 import importlib
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -116,12 +115,11 @@ def test_detect_hardware_ram_fail():
     mock_ctypes.byref.return_value = "ref"
     mock_ctypes.windll.kernel32.GlobalMemoryStatusEx.side_effect = OSError("Fail")
 
-    with patch.dict(sys.modules, {"ctypes": mock_ctypes}):
-        importlib.reload(config_module)
-        settings = config_module.detect_hardware_settings()
-        assert settings["ram_cache_mb"] == 4000
-
-    importlib.reload(config_module)
+    with patch.object(config_module, "ctypes", mock_ctypes):
+        with patch.object(config_module, "_get_posix_ram_gb", return_value=None):
+            with patch.object(config_module, "_get_windows_ram_gb", return_value=None):
+                settings = config_module.detect_hardware_settings()
+                assert settings["ram_cache_mb"] == 4000
 
 
 def test_load_config_invalid_field_order_type_exits(tmp_path):
@@ -177,24 +175,98 @@ def test_detect_ram_settings_api_failure_value():
     fake_ctypes.byref.side_effect = _identity
 
     with patch.object(config_module, "ctypes", fake_ctypes):
-        with patch.object(config_module, "log_info") as mock_log:
-            getattr(config_module, "_detect_ram_settings")(settings)
+        with patch.object(config_module, "_get_posix_ram_gb", return_value=None):
+            with patch.object(config_module, "log_info") as mock_log:
+                getattr(config_module, "_detect_ram_settings")(settings)
 
     assert settings["ram_cache_mb"] == 4000
     assert any("RAM: Unknown" in str(call.args[0]) for call in mock_log.call_args_list if call.args)
 
 
 def test_detect_gpu_settings_logs_nvenc_for_av1():
-    """NVIDIA + AV1 should log NVENC acceleration path."""
+    """NVIDIA + AV1 + OpenCL plugins present should log the combined path."""
     settings = {"use_gpu_opencl": False, "gpu_device_index": 0}
     with patch.object(config_module, "ENCODER", "av1"):
         with patch.object(config_module, "get_nvidia_gpu_info", return_value=(1, "NVIDIA GeForce RTX 5090")):
-            with patch.object(config_module, "log_info") as mock_log:
-                getattr(config_module, "_detect_gpu_settings")(settings)
+            with patch.object(config_module, "has_av1_nvenc_capability", return_value=True):
+                with patch.object(config_module, "vapoursynth_has_opencl_qtgmc", return_value=True):
+                    with patch.object(config_module, "log_info") as mock_log:
+                        getattr(config_module, "_detect_gpu_settings")(settings)
 
     assert settings["use_gpu_opencl"] is True
     assert settings["gpu_device_index"] == 1
-    assert any("OpenCL + NVENC" in str(call.args[0]) for call in mock_log.call_args_list if call.args)
+    assert any("OpenCL for QTGMC + NVENC" in str(call.args[0]) for call in mock_log.call_args_list if call.args)
+
+
+def test_detect_gpu_settings_disables_av1_nvenc_without_successful_probe():
+    """A detected NVIDIA GPU alone is insufficient to enable AV1 NVENC."""
+    settings = {"use_gpu_opencl": False, "gpu_device_index": 0}
+    with patch.object(config_module, "get_nvidia_gpu_info", return_value=(0, "NVIDIA GeForce RTX 3080")):
+        with patch.object(config_module, "has_av1_nvenc_capability", return_value=False):
+            with patch.object(config_module, "vapoursynth_has_opencl_qtgmc", return_value=False):
+                getattr(config_module, "_detect_gpu_settings")(settings)
+
+    assert settings["has_nvidia"] is True
+    assert settings["has_av1_nvenc"] is False
+
+
+def test_detect_gpu_settings_explains_av1_cpu_fallback_for_unsupported_nvenc():
+    """An AV1 request must explain a failed NVIDIA NVENC capability probe."""
+    settings = {"use_gpu_opencl": False, "gpu_device_index": 0}
+    with patch.object(config_module, "ENCODER", "av1"):
+        with patch.object(config_module, "get_nvidia_gpu_info", return_value=(0, "NVIDIA GeForce RTX 3080")):
+            with patch.object(config_module, "has_av1_nvenc_capability", return_value=False):
+                with patch.object(config_module, "vapoursynth_has_opencl_qtgmc", return_value=False):
+                    with patch.object(config_module, "log_info") as mock_log:
+                        getattr(config_module, "_detect_gpu_settings")(settings)
+
+    messages = [str(call.args[0]) for call in mock_log.call_args_list if call.args]
+    assert any("AV1 NVENC is unavailable" in message for message in messages)
+    assert any("libsvtav1" in message for message in messages)
+
+
+def test_detect_gpu_settings_disables_opencl_when_plugins_missing():
+    """NVIDIA present but no VapourSynth OpenCL plugins -> QTGMC stays on CPU."""
+    settings = {"use_gpu_opencl": True, "gpu_device_index": 0}
+    with patch.object(config_module, "ENCODER", "prores"):
+        with patch.object(config_module, "get_nvidia_gpu_info", return_value=(0, "NVIDIA GeForce RTX 3080")):
+            with patch.object(config_module, "has_av1_nvenc_capability", return_value=True):
+                with patch.object(config_module, "vapoursynth_has_opencl_qtgmc", return_value=False):
+                    with patch.object(config_module, "log_info") as mock_log:
+                        getattr(config_module, "_detect_gpu_settings")(settings)
+
+    assert settings["use_gpu_opencl"] is False
+    assert settings["has_nvidia"] is True
+    assert settings["has_av1_nvenc"] is True
+    assert any("QTGMC runs on CPU" in str(call.args[0]) for call in mock_log.call_args_list if call.args)
+
+
+def test_detect_gpu_settings_av1_nvenc_only_when_opencl_missing():
+    """NVIDIA + AV1 but no OpenCL plugins -> NVENC encode only, QTGMC on CPU."""
+    settings = {"use_gpu_opencl": True, "gpu_device_index": 0}
+    with patch.object(config_module, "ENCODER", "av1"):
+        with patch.object(config_module, "get_nvidia_gpu_info", return_value=(0, "NVIDIA GeForce RTX 4070")):
+            with patch.object(config_module, "has_av1_nvenc_capability", return_value=True):
+                with patch.object(config_module, "vapoursynth_has_opencl_qtgmc", return_value=False):
+                    with patch.object(config_module, "log_info") as mock_log:
+                        getattr(config_module, "_detect_gpu_settings")(settings)
+
+    assert settings["use_gpu_opencl"] is False
+    assert any("NVENC encode only" in str(call.args[0]) for call in mock_log.call_args_list if call.args)
+
+
+def test_detect_gpu_settings_no_nvidia_no_opencl_disabled():
+    """No NVIDIA and no OpenCL plugins -> acceleration fully disabled."""
+    settings = {"use_gpu_opencl": True, "gpu_device_index": 0}
+    with patch.object(config_module, "ENCODER", "prores"):
+        with patch.object(config_module, "get_nvidia_gpu_info", return_value=(None, None)):
+            with patch.object(config_module, "vapoursynth_has_opencl_qtgmc", return_value=False):
+                with patch.object(config_module, "log_info") as mock_log:
+                    getattr(config_module, "_detect_gpu_settings")(settings)
+
+    assert settings["use_gpu_opencl"] is False
+    assert settings["has_nvidia"] is False
+    assert any("DISABLED (QTGMC runs on CPU)" in str(call.args[0]) for call in mock_log.call_args_list if call.args)
 
 
 def test_load_hw_settings_skip_detect_via_env(monkeypatch):
@@ -347,9 +419,54 @@ def test_mux_path_skipped_when_output_missing(ad):
                                 ):
                                     with patch("auto_deinterlancer.AUDIO_CODEC", "aac"):
                                         with patch("auto_deinterlancer.AUDIO_BITRATE", "320k"):
-                                            # Intermediate exists, so it does cleanup
                                             result = ad.process_video(Path("in.mp4"))
 
     assert result["status"] == "not_found"
     assert result["output"] is None
     assert not mock_start_time.called
+
+
+def test_get_posix_ram_gb_sysconf():
+    """Verify _get_posix_ram_gb computes GB correctly via os.sysconf."""
+    with patch.object(
+        config_module.os,
+        "sysconf",
+        side_effect=lambda key: 4096 if key == "SC_PAGE_SIZE" else (4194304 if key == "SC_PHYS_PAGES" else None),
+        create=True,
+    ):
+        val = getattr(config_module, "_get_posix_ram_gb")()
+        assert val == 16.0
+
+
+def test_get_posix_ram_gb_proc_meminfo():
+    """Verify _get_posix_ram_gb fallback parses /proc/meminfo correctly."""
+    fake_meminfo = "MemTotal:       33554432 kB\nMemFree:        16777216 kB\n"
+    with patch.object(config_module.os, "sysconf", side_effect=AttributeError("no sysconf"), create=True):
+        with patch("os.path.exists", return_value=True):
+            with patch("builtins.open", mock_open(read_data=fake_meminfo)):
+                val = getattr(config_module, "_get_posix_ram_gb")()
+                assert val == 32.0
+
+
+def test_get_windows_ram_gb_structure_and_success():
+    """Verify _get_windows_ram_gb handles valid MemoryStatusEx structure."""
+
+    def _set_memory(ref):
+        ref.ull_total_phys = 64 * (1024**3)
+        return 1
+
+    fake_kernel32 = MagicMock()
+    fake_kernel32.GlobalMemoryStatusEx.side_effect = _set_memory
+    fake_windll = MagicMock()
+    fake_windll.kernel32 = fake_kernel32
+    fake_ctypes = MagicMock()
+    fake_ctypes.windll = fake_windll
+    fake_ctypes.Structure = type("_Struct", (), {})
+    fake_ctypes.c_ulong = int
+    fake_ctypes.c_ulonglong = int
+    fake_ctypes.sizeof.return_value = 128
+    fake_ctypes.byref = lambda val: val
+
+    with patch.object(config_module, "ctypes", fake_ctypes):
+        val = getattr(config_module, "_get_windows_ram_gb")()
+        assert val == 64.0

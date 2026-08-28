@@ -7,6 +7,7 @@ description = "Abseil Python Common Libraries, see https://github.com/abseil/abs
 optional = false
 python-versions = ">=3.10"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "absl_py-2.5.0-py3-none-any.whl", hash = "sha256:0f17b89f2a4eaaedc4f28c622998aa690564b3012a396a4ffad0821007fe03ba"},
     {file = "absl_py-2.5.0.tar.gz", hash = "sha256:0c996f25c0490700fadabe6351630f6111534fa0ae252cc6d2014ea3b141135f"},
@@ -65,6 +66,7 @@ description = "Easy to use audio stem separation, using various models from UVR 
 optional = false
 python-versions = ">=3.10"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "audio_separator-0.44.5-py3-none-any.whl", hash = "sha256:9db7d8ded987a74aec9d96be949b49c9068def69823abb59cabb6e6f88679ae7"},
     {file = "audio_separator-0.44.5.tar.gz", hash = "sha256:58866bc61d0c692fff8a52cda67c284f7847a844048987135677a007bf0ae794"},
@@ -148,6 +150,7 @@ description = "Unbearably fast runtime type checking in pure Python."
 optional = false
 python-versions = ">=3.8.0"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "beartype-0.18.5-py3-none-any.whl", hash = "sha256:5301a14f2a9a5540fe47ec6d34d758e9cd8331d36c4760fc7a5499ab86310089"},
     {file = "beartype-0.18.5.tar.gz", hash = "sha256:264ddc2f1da9ec94ff639141fbe33d22e12a9f75aa863b83b7046ffff1381927"},
@@ -770,14 +773,14 @@ all = ["cuda-toolkit (==13.*)", "cuda-toolkit[cufile] (==13.*) ; sys_platform ==
 
 [[package]]
 name = "cuda-pathfinder"
-version = "1.7.0"
+version = "1.8.0"
 description = "Pathfinder for CUDA components"
 optional = false
 python-versions = ">=3.10"
 groups = ["ml-heavy"]
 markers = "platform_system == \"Linux\""
 files = [
-    {file = "cuda_pathfinder-1.7.0-py3-none-any.whl", hash = "sha256:e9d67e950f3d5992b854dfd25917c3719d0c21d3057b11abe86ba6feec526138"},
+    {file = "cuda_pathfinder-1.8.0-py3-none-any.whl", hash = "sha256:c44e574dc997fae2814721d1ae97d0fd6db76db82decbe9b753bf75de53f515e"},
 ]
 
 [[package]]
@@ -868,6 +871,7 @@ description = "The Cython compiler for writing C extensions in the Python langua
 optional = false
 python-versions = ">=3.9"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "cython-3.3.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:0507d9caf7dc35f1212627145d5d13dbc5dd7128529a6608ab72690472fa688e"},
     {file = "cython-3.3.0-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:de883ec6764b61547c1e7674c0d8a8a875d398bd6bb684e46b93d83e4f13b260"},
@@ -941,7 +945,7 @@ description = "Differentiable quantization framework for PyTorch."
 optional = false
 python-versions = ">=3.7.0"
 groups = ["ml-heavy"]
-markers = "sys_platform != \"win32\""
+markers = "platform_system != \"Darwin\" and sys_platform != \"win32\""
 files = [
     {file = "diffq-0.2.4-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:3d8e6d6b882dd93568b41a7da9ff9657845ec08c82e71460544d0d04ed112320"},
     {file = "diffq-0.2.4-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:15d5055ebfc629914689d66fcfa36f6d751fd45b4b2331ba0d3390604e2b40fa"},
@@ -987,7 +991,7 @@ description = "Differentiable quantization framework for PyTorch -- fixed for co
 optional = false
 python-versions = ">=3.7.0"
 groups = ["ml-heavy"]
-markers = "sys_platform == \"win32\""
+markers = "sys_platform == \"win32\" and platform_system != \"Darwin\""
 files = [
     {file = "diffq_fixed-0.2.4-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:c911cda65ddebb672aaa8d80d902259ffc4ee469ce231021544093d83372ed15"},
     {file = "diffq_fixed-0.2.4-cp310-cp310-win_amd64.whl", hash = "sha256:d6fc81bd6ca17ebc04b8a163f9efae5afedf3274a4eee473f6742471a8d904bc"},
@@ -1030,6 +1034,7 @@ description = "A new flavour of deep learning operations"
 optional = false
 python-versions = ">=3.9"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "einops-0.8.2-py3-none-any.whl", hash = "sha256:54058201ac7087911181bfec4af6091bb59380360f069276601256a76af08193"},
     {file = "einops-0.8.2.tar.gz", hash = "sha256:609da665570e5e265e27283aab09e7f279ade90c4f01bcfca111f3d3e13f2827"},
@@ -1046,6 +1051,7 @@ files = [
     {file = "filelock-3.32.4-py3-none-any.whl", hash = "sha256:22e58ca3b1ae3b98993b762d7338367ae64fe50252bf78d59da3bfebcdf1cedd"},
     {file = "filelock-3.32.4.tar.gz", hash = "sha256:2bde2e4cf732e0153406d8a7bc80620ecf5e621fe0d25e41143c4e3b4733ff30"},
 ]
+markers = {ml-heavy = "platform_system != \"Darwin\""}
 
 [[package]]
 name = "flake8"
@@ -1071,6 +1077,7 @@ description = "The FlatBuffers serialization format for Python"
 optional = false
 python-versions = "*"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "flatbuffers-25.12.19-py2.py3-none-any.whl", hash = "sha256:7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4"},
 ]
@@ -1082,6 +1089,7 @@ description = "File-system specification"
 optional = false
 python-versions = ">=3.10"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "fsspec-2026.7.0-py3-none-any.whl", hash = "sha256:b57ddbafedfaef7018c1ecab32aa200a9d7ca26b77965f64e48b70061249d279"},
     {file = "fsspec-2026.7.0.tar.gz", hash = "sha256:c803c40f4cf860b49dea58ee3e1c33cb9c790520e233537e1340049f89b82a88"},
@@ -1188,6 +1196,7 @@ description = "A very fast and expressive template engine."
 optional = false
 python-versions = ">=3.7"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "jinja2-3.1.6-py3-none-any.whl", hash = "sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67"},
     {file = "jinja2-3.1.6.tar.gz", hash = "sha256:0137fb05990d35f1275a587e9aee6d56da821fc83491a0fb838183be43f66d6d"},
@@ -1218,6 +1227,7 @@ description = "Nice DSP sweets: resampling, FFT Convolutions. All with PyTorch, 
 optional = false
 python-versions = ">=3.9.0"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "julius-0.2.8-py3-none-any.whl", hash = "sha256:6891235cbc355e629d839f87489bff8ca46e57a0e7cc35abb909c7a2aa538c25"},
     {file = "julius-0.2.8.tar.gz", hash = "sha256:d691e651200930affea4f6c849c26e95fec846087281ae3d1a7757eac90253d5"},
@@ -1384,6 +1394,7 @@ description = "Safely add untrusted strings to HTML/XML markup."
 optional = false
 python-versions = ">=3.9"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "markupsafe-3.0.3-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:2f981d352f04553a7171b8e44369f2af4055f888dfb147d55e42d29e29e74559"},
     {file = "markupsafe-3.0.3-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:e1c1493fb6e50ab01d20a22826e57520f1284df32f2d8601fdd90b6304601419"},
@@ -1563,6 +1574,7 @@ description = "ML Collections is a library of Python collections designed for ML
 optional = false
 python-versions = ">=3.10"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "ml_collections-1.1.0-py3-none-any.whl", hash = "sha256:23b6fa4772aac1ae745a96044b925a5746145a70734f087eaca6626e92c05cbc"},
     {file = "ml_collections-1.1.0.tar.gz", hash = "sha256:0ac1ac6511b9f1566863e0bb0afad0c64e906ea278ad3f4d2144a55322671f6f"},
@@ -1582,6 +1594,7 @@ description = "ml_dtypes is a stand-alone implementation of several NumPy dtype 
 optional = false
 python-versions = ">=3.10"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "ml_dtypes-0.6.0-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:bad8d1dd5bed060a29332b99d63d0e5c2969081e1c6ea54adfbccfdfa783be44"},
     {file = "ml_dtypes-0.6.0-cp310-cp310-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:008382aeab529df5d3f00501ad9a7dcd64494d4b5b1971fc4c79019e6c1f5010"},
@@ -1638,6 +1651,7 @@ description = "Python library for arbitrary-precision floating-point arithmetic"
 optional = false
 python-versions = "*"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "mpmath-1.3.0-py3-none-any.whl", hash = "sha256:a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c"},
     {file = "mpmath-1.3.0.tar.gz", hash = "sha256:7a28eb2a9774d00c7bc92411c19a89209d5da7c4c9a9e227be8330a23a25b91f"},
@@ -1792,6 +1806,7 @@ description = "Python package for creating and manipulating graphs and networks"
 optional = false
 python-versions = "!=3.14.1,>=3.11"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "networkx-3.6.1-py3-none-any.whl", hash = "sha256:d47fbf302e7d9cbbb9e2555a0d267983d2aa476bac30e90dfbe5669bd57f3762"},
     {file = "networkx-3.6.1.tar.gz", hash = "sha256:26b7c357accc0c8cde558ad486283728b65b6a95d85ee1cd66bafab4c8168509"},
@@ -1931,7 +1946,7 @@ description = "CUBLAS native runtime libraries"
 optional = false
 python-versions = ">=3"
 groups = ["ml-heavy"]
-markers = "platform_system == \"Linux\" or (platform_system == \"Linux\" or platform_system == \"Windows\") and implementation_name == \"cpython\""
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "nvidia_cublas-13.4.0.1-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:705d7d214fbb20f134415ecadc488abf74f444c155a6555dec5687404afb18a9"},
     {file = "nvidia_cublas-13.4.0.1-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:53bf22e2ccbf644db74b6cc21cea7f5efb1a52aa64515438b430abbd05af4106"},
@@ -1962,6 +1977,7 @@ description = "NVRTC native runtime libraries"
 optional = false
 python-versions = ">=3"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "nvidia_cuda_nvrtc-13.2.78-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl", hash = "sha256:a9049031da08cbedd0c20e3470e5a978dc330af0e0326b3b05774718c665dc3e"},
     {file = "nvidia_cuda_nvrtc-13.2.78-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:a50367a7e2a0bd00fb27e5648179149cc7a60e7c7811740a5ff559f06234526d"},
@@ -1975,6 +1991,7 @@ description = "CUDA Runtime native Libraries"
 optional = false
 python-versions = ">=3"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "nvidia_cuda_runtime-13.2.75-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:36e539e8deb01568025830c1454216c26ef4b4529507220b1d8ef739bf5c6439"},
     {file = "nvidia_cuda_runtime-13.2.75-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:72bf454902da594e0b833cadeddc8b7100ce1c7cf7ed9023943931be1aa913b7"},
@@ -1988,7 +2005,7 @@ description = "cuDNN runtime libraries"
 optional = false
 python-versions = ">=3"
 groups = ["ml-heavy"]
-markers = "(platform_system == \"Windows\" or platform_system == \"Linux\") and implementation_name == \"cpython\" or platform_system == \"Linux\""
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "nvidia_cudnn_cu13-9.20.0.48-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:e31454ae00094b0c55319d9d15b6fa2fc50a9e1c0f5c8c80fb75258234e731e1"},
     {file = "nvidia_cudnn_cu13-9.20.0.48-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:0c45dd8eeb50b603f07995b1b300c62ffe6a1980482b82b3bcf94a4ca9d49304"},
@@ -2005,7 +2022,7 @@ description = "CUFFT native runtime libraries"
 optional = false
 python-versions = ">=3"
 groups = ["ml-heavy"]
-markers = "sys_platform == \"win32\" and platform_system == \"Linux\" and platform_machine == \"AMD64\" or sys_platform == \"linux\" and (platform_machine == \"aarch64\" or platform_machine == \"x86_64\") and platform_system == \"Linux\""
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "nvidia_cufft-12.2.0.46-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:2e8f3a22c2745f95327b7639ba2868ea2cbd5d3131ebe6313394e24164054f41"},
     {file = "nvidia_cufft-12.2.0.46-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:a9667ae4d81b9e54ddbbad24a9e72334f89d4fc184566d05ef028e2760c820eb"},
@@ -2035,7 +2052,7 @@ description = "CURAND native runtime libraries"
 optional = false
 python-versions = ">=3"
 groups = ["ml-heavy"]
-markers = "sys_platform == \"win32\" and platform_system == \"Linux\" and platform_machine == \"AMD64\" or sys_platform == \"linux\" and (platform_machine == \"aarch64\" or platform_machine == \"x86_64\") and platform_system == \"Linux\""
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "nvidia_curand-10.4.2.55-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:342e40ddcaedc92aedc72839e0c10064096fceea2f1d0eb57951f86d2901f8c0"},
     {file = "nvidia_curand-10.4.2.55-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:b4080cab49d4939f8e46b2c195c76c698d2289835c36ede558836daa40000e70"},
@@ -2129,7 +2146,7 @@ description = "Nvidia JIT LTO Library"
 optional = false
 python-versions = ">=3"
 groups = ["ml-heavy"]
-markers = "sys_platform == \"win32\" and platform_system == \"Linux\" and platform_machine == \"AMD64\" or sys_platform == \"linux\" and (platform_machine == \"aarch64\" or platform_machine == \"x86_64\") and platform_system == \"Linux\""
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "nvidia_nvjitlink-13.3.33-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl", hash = "sha256:26a6de7fb4c8fdaa7703d3dad720d6d427ddfea5c48a528fd97c11733ad830e5"},
     {file = "nvidia_nvjitlink-13.3.33-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:ce48b37dfeb3cb1eae4cf85adacb47d7a6539ea2272870c9a3628ce275c2037e"},
@@ -2170,6 +2187,7 @@ description = "Open Neural Network Exchange"
 optional = false
 python-versions = ">=3.10"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "onnx_weekly-1.23.0.dev20260824-cp310-cp310-macosx_13_0_universal2.whl", hash = "sha256:f0be95c927ab20659a0a5c63e72e4cfddb3100c39e89b898d86f0d54a9034509"},
     {file = "onnx_weekly-1.23.0.dev20260824-cp310-cp310-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:1fc82d3bda8eea9a774ec878d386137a0ee6a39ff6802be12c4dbec1a572be98"},
@@ -2213,6 +2231,7 @@ description = "ONNX to PyTorch converter"
 optional = false
 python-versions = ">=3.6"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "onnx2torch_py313-1.6.0-py3-none-any.whl", hash = "sha256:03b1cc771f93941cc221635547e97dd7823dffc05f052057e51c6a45fbacba70"},
     {file = "onnx2torch_py313-1.6.0.tar.gz", hash = "sha256:d27b54c7e170f12ad252fe186e6cab8f3cade8ee4e596682acc5a3afddadb753"},
@@ -2234,6 +2253,7 @@ description = "ONNX Runtime is a runtime accelerator for Machine Learning models
 optional = false
 python-versions = ">=3.11"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "onnxruntime_gpu-1.29.0-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:de3caf93887ba4ad51c7d3cab04c7b464f9dd93c51047be5bfb413fd4a191e6a"},
     {file = "onnxruntime_gpu-1.29.0-cp311-cp311-manylinux_2_34_aarch64.whl", hash = "sha256:6f5344dce3d6d41248d5135e159f5addb49114198ea4630c258855cb532a6688"},
@@ -2256,6 +2276,11 @@ files = [
 [package.dependencies]
 flatbuffers = "*"
 numpy = ">=1.21.6"
+nvidia-cuda-nvrtc = {version = ">=13.0,<14.0", optional = true, markers = "extra == \"cuda\""}
+nvidia-cuda-runtime = {version = ">=13.0,<14.0", optional = true, markers = "extra == \"cuda\""}
+nvidia-cudnn-cu13 = {version = ">=9.0,<10.0", optional = true, markers = "extra == \"cudnn\""}
+nvidia-cufft = {version = ">=12.0,<13.0", optional = true, markers = "extra == \"cuda\""}
+nvidia-curand = {version = ">=10.0,<11.0", optional = true, markers = "extra == \"cuda\""}
 packaging = "*"
 protobuf = ">=4.25.8"
 
@@ -2408,6 +2433,7 @@ files = [
     {file = "pillow-12.3.0-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:04f01d28a6aaff387bf842a13be313df23ba0597a44f1a976c9feb3c6ff4711a"},
     {file = "pillow-12.3.0.tar.gz", hash = "sha256:3b8182a766685eaa002637e28b4ec8d6b18819a0c71f579bf0dbaa5830297cce"},
 ]
+markers = {ml-heavy = "platform_system != \"Darwin\""}
 
 [package.extras]
 docs = ["furo", "olefile", "sphinx (>=8.2)", "sphinx-autobuild", "sphinx-copybutton", "sphinx-inline-tabs", "sphinxext-opengraph"]
@@ -2553,6 +2579,7 @@ description = ""
 optional = false
 python-versions = ">=3.10"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "protobuf-7.36.0-cp310-abi3-macosx_10_9_universal2.whl", hash = "sha256:9103532dffd80c6fab7e50c65a31007680a06eb57537d437bb1b35812c138a37"},
     {file = "protobuf-7.36.0-cp310-abi3-manylinux2014_aarch64.whl", hash = "sha256:bf94a5917c71058262de683669bc0a797a7669d3de71f0b36d058e3194f47b44"},
@@ -2633,6 +2660,7 @@ description = "Manipulate audio with an simple and easy high level interface"
 optional = false
 python-versions = "*"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "pydub-0.25.1-py2.py3-none-any.whl", hash = "sha256:65617e33033874b59d87db603aa1ed450633288aefead953b30bded59cb599a6"},
     {file = "pydub-0.25.1.tar.gz", hash = "sha256:980a33ce9949cab2a569606b65674d748ecbca4f0796887fd6f46173a7b0d30f"},
@@ -3093,6 +3121,7 @@ files = [
     {file = "pyyaml-6.0.3-cp39-cp39-win_amd64.whl", hash = "sha256:2e71d11abed7344e42a8849600193d15b6def118602c4c176f748e4583246007"},
     {file = "pyyaml-6.0.3.tar.gz", hash = "sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f"},
 ]
+markers = {ml-heavy = "platform_system != \"Darwin\""}
 
 [[package]]
 name = "radon"
@@ -3142,6 +3171,7 @@ description = "Efficient signal resampling"
 optional = false
 python-versions = "*"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "resampy-0.4.3-py3-none-any.whl", hash = "sha256:ad2ed64516b140a122d96704e32bc0f92b23f45419e8b8f478e5a05f83edcebd"},
     {file = "resampy-0.4.3.tar.gz", hash = "sha256:a0d1c28398f0e55994b739650afef4e3974115edbe96cd4bb81968425e916e47"},
@@ -3182,6 +3212,7 @@ description = "Rotary Embedding - Pytorch"
 optional = false
 python-versions = "*"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "rotary_embedding_torch-0.6.5-py3-none-any.whl", hash = "sha256:96c0b27b688820cbde652dd7869cf035b4f653eee53ddaf78133cf7cdd4aab19"},
     {file = "rotary_embedding_torch-0.6.5.tar.gz", hash = "sha256:a3623274c559e0215922edc7cd14068d5a64dea1ca469e1ecd642b293ee8af78"},
@@ -3244,6 +3275,7 @@ description = "Python bindings for libsamplerate based on CFFI and NumPy"
 optional = false
 python-versions = "*"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "samplerate-0.1.0-py2.py3-none-any.whl", hash = "sha256:f55e5c9d0a8ba3c82a53b7d9c34a2d145439c61166a7f310efaec88f2781b8f8"},
     {file = "samplerate-0.1.0.tar.gz", hash = "sha256:75ef725e6cd9c4545569caf4c47147beab7b53b2c36e5122e8c285d348f88847"},
@@ -3400,6 +3432,7 @@ files = [
     {file = "setuptools-84.0.0-py3-none-any.whl", hash = "sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670"},
     {file = "setuptools-84.0.0.tar.gz", hash = "sha256:f4695c21257f0d9b537ec2692c941d02ee143b7cc1276941349a546573b2ef73"},
 ]
+markers = {ml-heavy = "platform_system != \"Darwin\""}
 
 [package.extras]
 check = ["pytest-checkdocs (>=2.14)", "pytest-ruff (>=0.2.1) ; sys_platform != \"cygwin\"", "ruff (>=0.13.0) ; sys_platform != \"cygwin\""]
@@ -3421,6 +3454,7 @@ files = [
     {file = "six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"},
     {file = "six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81"},
 ]
+markers = {ml-heavy = "platform_system != \"Darwin\""}
 
 [[package]]
 name = "sly"
@@ -3532,6 +3566,7 @@ description = "Computer algebra system (CAS) in Python"
 optional = false
 python-versions = ">=3.9"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "sympy-1.14.0-py3-none-any.whl", hash = "sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5"},
     {file = "sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517"},
@@ -3672,6 +3707,7 @@ description = "Tensors and Dynamic neural networks in Python with strong GPU acc
 optional = false
 python-versions = ">=3.10"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "torch-2.13.0+cu132-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:ab33565af96054038fb17903e484177fdc6063b805852ddda955be225865cbc3"},
     {file = "torch-2.13.0+cu132-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:09f72f4343d3d5cfa1da45f5024d37fc60fe62009c5904742962f9b28b576adf"},
@@ -3769,6 +3805,7 @@ description = "image and video datasets and models for torch deep learning"
 optional = false
 python-versions = ">=3.10,!=3.14.1"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "torchvision-0.28.0+cu132-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:07445dd80e485960b22bddc01527eda9ac79725d865600c68471ed51b0b21cd9"},
     {file = "torchvision-0.28.0+cu132-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:8b7d7f4406a008716109b9876aec45600f83f20dab91a7e9239cf314b2e17849"},
@@ -3811,6 +3848,7 @@ description = "Fast, Extensible Progress Meter"
 optional = false
 python-versions = ">=3.8"
 groups = ["ml-heavy"]
+markers = "platform_system != \"Darwin\""
 files = [
     {file = "tqdm-4.70.0-py3-none-any.whl", hash = "sha256:7f585706bfddbdebf89daac705b2dfcc16890130727d3197ca62c732b4310953"},
     {file = "tqdm-4.70.0.tar.gz", hash = "sha256:55b0b0dbd97462d06ebee91e4dac24ed4d4702be82b24f07e6c1d27e08cea220"},
@@ -3916,4 +3954,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.13"
-content-hash = "366d68b01f9d04ffc0ecff696b34909dec9e6ee5421c06e89fd554509fb5586e"
+content-hash = "5749c82b528da3b12e958249b510f834fa3b91664e0171783b6d20838d96da59"

@@ -90,12 +90,14 @@ from modules.core.utils import (
     get_cpu_name,
     get_duration,
     get_gpu_name,
+    get_project_root,
     get_vspipe_env,
     is_python_vspipe_launcher,
     log_debug,
     log_error,
     log_info,
     parse_ffmpeg_time,
+    resolve_vspipe_executable,
     setup_environment,
     update_progress,
 )
@@ -194,11 +196,13 @@ def _print_interactive_help():
 
 
 def _strip_wrapping_quotes(value: str) -> str:
-    """Remove a matching pair of surrounding quotes from a user-supplied path."""
-    for quote_char in ('"', "'"):
-        if value.startswith(quote_char) and value.endswith(quote_char):
-            return value[1:-1]
-    return value
+    """Remove a matching pair of surrounding quotes and unescape spaces from a user-supplied path."""
+    cleaned = value.strip()
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in ('"', "'"):
+        cleaned = cleaned[1:-1]
+    if sys.platform != "win32":
+        cleaned = cleaned.replace("\\ ", " ")
+    return cleaned
 
 
 def _expand_input_path(path: Path, video_exts: set) -> list[Path]:
@@ -232,8 +236,8 @@ def _get_interactive_input(video_exts: set) -> list:
         path = Path(cleaned_input)
         if path.exists():
             return _expand_input_path(path, video_exts)
-    except KeyboardInterrupt:
-        pass
+    except (EOFError, KeyboardInterrupt):
+        log_info("\n>> Interactive input cancelled. Exiting.")
     return []
 
 
@@ -659,7 +663,7 @@ def _build_processing_commands(input_path: Path, temp_script: Path, temp_output:
     create_vpy_script(str(input_path), str(temp_script), DEINTERLACE_MODE)
 
     log_info(">> Verifying Script with vspipe...")
-    vspipe_exe = shutil.which("vspipe") or "vspipe"
+    vspipe_exe = resolve_vspipe_executable(get_project_root())
     total_frames, fps, width, height, fmt_name = get_vpy_info(vspipe_exe, str(temp_script))
     duration_sec = total_frames / (fps if fps else 29.97) if total_frames else get_duration(str(input_path))
     safe_width, safe_height = _resolve_dimensions(width, height)
@@ -741,7 +745,10 @@ def _get_speed_multiplier(duration_sec: float, elapsed_sec: float) -> float | No
 def _prompt_before_exit_if_interactive():
     """Keep the console window open for double-click launches."""
     if len(sys.argv) == 1:
-        input("\nPress Enter to exit...")
+        try:
+            input("\nPress Enter to exit...")
+        except (EOFError, KeyboardInterrupt):
+            pass
 
 
 def _log_batch_result(index: int, total: int):

@@ -2,6 +2,7 @@
 
 import ast
 import importlib
+import os
 import stat
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
@@ -58,15 +59,7 @@ def _render_vpy_content(**kwargs) -> str:
             patch("modules.runtime.vspipe.CONFIG", config_override),
             patch("os.getcwd", return_value=kwargs.get("cwd", "C:/repo/it's root")),
             patch("modules.runtime.vspipe.get_project_root", return_value=kwargs.get("project_root", "C:/repo")),
-            patch(
-                "modules.runtime.vspipe._get_vpy_site_paths",
-                return_value=kwargs.get("site_paths", ["C:/repo/.venv/Lib/site-packages"]),
-            ),
-            patch(
-                "modules.runtime.vspipe._resolve_vspipe_plugin_dir",
-                return_value=kwargs.get("plugin_dir", "C:/repo/.venv/vs/vs-plugins"),
-            ),
-            patch("modules.runtime.vspipe.os.path.exists", return_value=kwargs.get("path_exists", True)),
+            patch("modules.runtime.vspipe.os.path.exists", side_effect=kwargs.get("path_exists", lambda _path: True)),
         ):
             create_vpy_script("in.mp4", "out.vpy", "QTGMC", override_settings=override_settings)
 
@@ -127,6 +120,56 @@ def test_get_vpy_site_paths_handles_uppercase_dot_venv():
     assert "C:/repo/.VENV/Lib/site-packages" in paths
 
 
+def test_plugin_loading_uses_coreplugins_directory_when_present():
+    """Portable installs retain AvsCompat loading with the alternate core directory."""
+    vspipe_module = importlib.import_module("modules.runtime.vspipe")
+    get_plugin_loading_lines = getattr(vspipe_module, "_get_plugin_loading_lines")
+
+    def mock_find_plugin_candidate(plugin_dir, base_name):
+        if Path(plugin_dir).name == "coreplugins" and base_name == "AvsCompat.dll":
+            return "C:/repo/.VENV/vs/coreplugins/AvsCompat.dll"
+        return None
+
+    with (
+        patch(
+            "modules.runtime.vspipe.os.path.exists",
+            side_effect=lambda path: Path(path).name in {"coreplugins", "AvsCompat.dll"},
+        ),
+        patch("modules.runtime.vspipe._find_plugin_candidate", side_effect=mock_find_plugin_candidate) as mock_find,
+        patch("modules.runtime.vspipe._get_plugin_search_dirs", return_value=[]),
+    ):
+        lines = get_plugin_loading_lines("C:/repo/.VENV")
+
+    assert "AvsCompat.dll" in "".join(lines)
+    mock_find.assert_called_once_with(
+        os.path.join("C:/repo/.VENV", "vs", "coreplugins"),
+        "AvsCompat.dll",
+    )
+
+
+def test_create_vpy_script_uses_uppercase_venv_root_when_lowercase_is_missing():
+    """Generated VPY paths consistently use .VENV when it is the only local venv."""
+
+    def only_uppercase_venv(path):
+        normalized = str(path).replace("\\", "/")
+        if normalized.endswith("/.venv"):
+            return False
+        if normalized.endswith("/vs/plugins"):
+            return False
+        return True
+
+    with patch("sys.path", ["C:/repo/.VENV/Lib/site-packages"]):
+        rendered = _render_vpy_content(
+            project_root="C:/repo",
+            path_exists=only_uppercase_venv,
+        )
+
+    assert "C:/repo/.VENV/Lib/site-packages" in rendered
+    assert "C:/repo/.VENV/vs" in rendered
+    assert "C:/repo/.VENV/vs/vs-plugins" in rendered
+    assert "C:/repo/.venv" not in rendered
+
+
 def test_get_vpy_info():
     """Test vspipe --info parsing."""
     mock_output = b"Output Index: 0\nType: Video\nFrames: 1000\nFPS: 30000/1001 (29.970 fps)\nFormat Name: RGB24"
@@ -138,11 +181,11 @@ def test_get_vpy_info():
         assert frames == 1000
         assert pytest.approx(fps, 0.001) == 29.970
         env = mock_check_output.call_args.kwargs["env"]
-        assert "PYTHONHOME" not in env
-        assert "PYTHONPATH" not in env
+        assert env["PYTHONHOME"] == "X"
+        assert env["PYTHONPATH"] == "Y"
 
 
-def test_detect_hardware_logic_prioritizes_nvidia_gpu_index():
+def test_detect_hardware_logic_prioritizes_nvidia_gpu_index(assume_opencl_qtgmc_available):  # pylint: disable=unused-argument
     """Hardware detection should prefer the NVIDIA index from mixed GPU output."""
     config_module = importlib.import_module("modules.core.config")
     detect_hardware_settings = config_module.detect_hardware_settings
@@ -151,6 +194,7 @@ def test_detect_hardware_logic_prioritizes_nvidia_gpu_index():
         patch("os.cpu_count", return_value=12),
         patch("shutil.which", return_value="/bin/nvidia-smi"),
         patch("subprocess.check_output", return_value=b"GPU 0: Intel(R) UHD Graphics\nGPU 1: NVIDIA GeForce RTX 3080"),
+        patch("modules.core.config.has_av1_nvenc_capability", return_value=True),
     ):
         settings = detect_hardware_settings()
 
@@ -159,7 +203,7 @@ def test_detect_hardware_logic_prioritizes_nvidia_gpu_index():
     assert settings["gpu_device_index"] == 1
 
 
-def test_detect_hardware_logic_uses_high_memory_profile():
+def test_detect_hardware_logic_uses_high_memory_profile(assume_opencl_qtgmc_available):  # pylint: disable=unused-argument
     """Hardware detection should apply the high-memory cache profile."""
     config_module = importlib.import_module("modules.core.config")
     detect_hardware_settings = config_module.detect_hardware_settings
@@ -169,6 +213,7 @@ def test_detect_hardware_logic_uses_high_memory_profile():
         patch("os.cpu_count", return_value=32),
         patch("shutil.which", return_value="/bin/nvidia-smi"),
         patch("subprocess.check_output", return_value=b"GPU 0: NVIDIA RTX 5090"),
+        patch("modules.core.config.has_av1_nvenc_capability", return_value=True),
     ):
         settings = detect_hardware_settings()
 
@@ -194,13 +239,14 @@ def test_detect_hardware_logic_uses_midrange_memory_profile():
     assert settings["gpu_device_index"] == 0
 
 
-def test_detect_hardware_logic_falls_back_on_ctypes_failure():
+def test_detect_hardware_logic_falls_back_on_ctypes_failure(assume_opencl_qtgmc_available):  # pylint: disable=unused-argument
     """Hardware detection should keep safe defaults when ctypes probing fails."""
     config_module = importlib.import_module("modules.core.config")
     detect_hardware_settings = config_module.detect_hardware_settings
 
     with (
         patch.object(config_module, "ctypes", _build_mock_ctypes(side_effect=OSError("Ctypes Error"))),
+        patch.object(config_module, "_get_posix_ram_gb", return_value=None),
         patch("os.cpu_count", return_value=8),
         patch("shutil.which", return_value=None),
     ):

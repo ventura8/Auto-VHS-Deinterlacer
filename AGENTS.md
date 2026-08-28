@@ -12,7 +12,7 @@ models for audio separation, hardware-adaptive threading, and
 audio-video synchronization.
 
 - **Version single source of truth**: Pinned in `pyproject.toml`
-  (`[project].version`, currently `1.0.4`).
+  (`[project].version`, currently `1.1.0`).
 - **Runtime Environment**: Windows-first on Python 3.12 (CPython
   64-bit) with virtualenv located at `.VENV`.
 
@@ -36,8 +36,15 @@ audio-video synchronization.
   scripts under `.github/scripts/` are validated via strict linters and metrics.
 - **Mocking Boundaries**: Mock only external boundaries (FFmpeg,
   external VSPipe binary, hardware probing). Never mock owned code.
-- **Validation Interpreter**: Always use `.VENV\Scripts\python.exe`
-  for local checks and test runs.
+- **Documentation Synchronization Invariant**: Every time work is performed
+  on the project, update all relevant Markdown files (`AGENTS.md`, `.agent/*`,
+  `docs/*`, `README.md`, etc.) to keep architectural, procedural, and requirement
+  documentation in sync with the codebase.
+- **Validation Interpreter**: The step-by-step commands in the next section
+  are Windows PowerShell and use `.\.VENV\Scripts\python.exe`. On Linux &
+  macOS run the full automated pipeline instead (`./run_pipeline_localy.sh`,
+  interpreter `./.venv/bin/python`), which performs the same checks in the
+  same order.
 
 ## Validation Order & Commands
 
@@ -111,9 +118,8 @@ audio-video synchronization.
 
 1. **Full Automated Local Pipeline**:
 
-   ```powershell
-   .\run_pipeline_localy.ps1
-   ```
+   - Windows (PowerShell): `.\run_pipeline_localy.ps1` (virtual environment at `.VENV`, interpreter at `.\.VENV\Scripts\python.exe`)
+   - Linux & macOS (Bash): `./run_pipeline_localy.sh` (virtual environment at `.venv`, interpreter at `./.venv/bin/python`)
 
 ## Skills Index
 

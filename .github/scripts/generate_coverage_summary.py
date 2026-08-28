@@ -3,6 +3,7 @@
 import sys
 from datetime import datetime
 
+from coverage_paths import extract_source_roots, resolve_repo_relative
 from defusedxml import ElementTree as ET
 
 
@@ -19,7 +20,7 @@ def _extract_global_rates(root) -> tuple[float, float]:
     return line_rate, branch_rate
 
 
-def _extract_class_row(cls):
+def _extract_class_row(cls, source_roots):
     """Parse a Cobertura class node into a summary row tuple."""
     filename = cls.get("filename")
     line_rate_raw = cls.get("line-rate")
@@ -28,19 +29,21 @@ def _extract_class_row(cls):
     if not filename or line_rate_raw is None or branch_rate_raw is None:
         raise ValueError("missing required class attributes")
 
-    simplified_name = filename.replace("\\", "/")
+    simplified_name = resolve_repo_relative(filename, source_roots)
+    if not simplified_name:
+        raise ValueError("unresolvable class filename")
     c_line_rate = float(line_rate_raw) * 100
     c_branch_rate = float(branch_rate_raw) * 100
-    complexity = cls.get("complexity", "N/A")
-    return simplified_name, c_line_rate, c_branch_rate, complexity
+    return simplified_name, c_line_rate, c_branch_rate
 
 
 def _iter_class_rows(root):
     """Yield per-class coverage table rows from the Cobertura payload."""
+    source_roots = extract_source_roots(root)
     for package in root.findall(".//package"):
         for cls in package.findall(".//class"):
             try:
-                yield _extract_class_row(cls)
+                yield _extract_class_row(cls, source_roots)
             except (AttributeError, TypeError, ValueError) as error:
                 print(f"Skipping malformed class entry: {error}", file=sys.stderr)
 
@@ -54,11 +57,11 @@ def _build_markdown(line_rate: float, branch_rate: float, timestamp: str, rows) 
         f"**Branch Coverage:** {branch_rate:.2f}%",
         f"**Generated:** {timestamp}",
         "",
-        "| File | Coverage | Branches | Complexity |",
-        "| :--- | :---: | :---: | :---: |",
+        "| File | Coverage | Branches |",
+        "| :--- | :---: | :---: |",
     ]
-    for filename, c_line_rate, c_branch_rate, complexity in rows:
-        markdown_lines.append(f"| {filename} | {c_line_rate:.1f}% | {c_branch_rate:.1f}% | {complexity} |")
+    for filename, c_line_rate, c_branch_rate in rows:
+        markdown_lines.append(f"| {filename} | {c_line_rate:.1f}% | {c_branch_rate:.1f}% |")
     return "\n".join(markdown_lines)
 
 

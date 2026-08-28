@@ -3,7 +3,7 @@
 import importlib
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -29,6 +29,32 @@ def setup_path():
     """Ensure project root is in sys.path globally for all tests."""
     if PROJECT_ROOT not in sys.path:
         sys.path.insert(0, PROJECT_ROOT)
+
+
+@pytest.fixture(autouse=True)
+def _clear_opencl_qtgmc_probe_cache():
+    """Drop cached VapourSynth OpenCL-probe results between tests.
+
+    ``modules.core.utils.vapoursynth_has_opencl_qtgmc`` is ``lru_cache``-wrapped,
+    so a probe result (real or mocked) would otherwise leak into later tests.
+    """
+    probe = importlib.import_module("modules.core.utils").vapoursynth_has_opencl_qtgmc
+    probe.cache_clear()
+    yield
+    probe.cache_clear()
+
+
+@pytest.fixture
+def assume_opencl_qtgmc_available():
+    """Pin the VapourSynth OpenCL-plugin probe to "available" for one test.
+
+    Hardware-detection tests assert the Windows/CI baseline where nnedi3cl and
+    eedi3m.EEDI3CL are installed, but the bare test venv has neither. Request
+    this fixture explicitly from those tests only, so every other test still
+    observes the real probe result.
+    """
+    with patch("modules.core.config.vapoursynth_has_opencl_qtgmc", return_value=True):
+        yield
 
 
 @pytest.fixture

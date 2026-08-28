@@ -1,0 +1,21 @@
+services:
+  macos-test:
+    image: dockurr/macos@sha256:08d1bcaac74ad44d548b7ce683b3dded083512d2a0d26416f9a620b763f8ea3d
+    container_name: auto-vhs-dockurr-macos
+    environment:
+      VERSION: "14"
+      RAM_SIZE: "8G"
+      CPU_CORES: "4"
+      DISK_SIZE: "64G"
+      PROTECT: "Y"
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "127.0.0.1:8007:8006"
+      - "127.0.0.1:5900:5900"
+    volumes:
+      - ../:/shared
+    restart: "no"

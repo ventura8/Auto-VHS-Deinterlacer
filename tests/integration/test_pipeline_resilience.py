@@ -141,10 +141,11 @@ def test_get_cpu_name_fallback_win(ad):
 @pytest.mark.skipif(sys.platform == "win32", reason="Non-Windows CPU fallback test")
 def test_get_cpu_name_fallback_linux(ad):
     """Test CPU name fallback (Linux)."""
-    # force exception
-    with patch("auto_deinterlancer.winreg.OpenKey", side_effect=OSError("No Reg")):
-        with patch("platform.processor", return_value="FallbackCPU"):
-            assert ad.get_cpu_name() == "FallbackCPU"
+    with patch("modules.core.utils.winreg", None):
+        with patch("modules.core.utils._get_linux_cpu_name", return_value=None):
+            with patch("platform.system", return_value="Linux"):
+                with patch("platform.processor", return_value="FallbackCPU"):
+                    assert ad.get_cpu_name() == "FallbackCPU"
 
 
 def test_cleanup_logic(ad):
@@ -230,11 +231,10 @@ def testget_input_files_no_default(ad):
 
 
 def testget_input_files_eof(ad):
-    """Test EOF handling."""
+    """EOF at the interactive prompt exits cleanly without input files."""
     with patch("builtins.input", side_effect=EOFError):
         with patch("sys.argv", ["script.py"]):
-            with pytest.raises(EOFError):
-                ad.get_input_files()
+            assert ad.get_input_files() == []
 
 
 def test_check_requirements_missing_tools(ad):
@@ -513,13 +513,14 @@ def testget_input_files_cli_with_directory(ad):
                         assert len(files) >= 1
 
 
-def test_detect_hardware_gpu_found_no_nvidia(ad):
+def test_detect_hardware_gpu_found_no_nvidia(ad, assume_opencl_qtgmc_available):  # pylint: disable=unused-argument
     """Test GPU detection when nvidia-smi exists but no NVIDIA in output."""
     with patch("shutil.which", return_value="/usr/bin/nvidia-smi"):
         with patch("subprocess.check_output", return_value=b"AMD Radeon"):
             with patch("auto_deinterlancer.PERF_PROFILE", "auto"):
                 settings = ad.detect_hardware_settings()
-                # Expect True (Generic OpenCL), because we only explicit enable for NVIDIA but default is True
+                # assume_opencl_qtgmc_available pins vapoursynth_has_opencl_qtgmc() to True,
+                # and _detect_gpu_settings copies that probe result into use_gpu_opencl.
                 assert settings["use_gpu_opencl"] is True
 
 

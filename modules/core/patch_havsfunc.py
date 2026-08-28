@@ -8,8 +8,24 @@ from modules.core.utils import get_project_root
 
 
 def _get_havsfunc_path() -> str:
-    """Return the expected havsfunc.py path inside the local venv."""
-    return os.path.join(get_project_root(), ".VENV", "Lib", "site-packages", "havsfunc.py")
+    """Return the expected havsfunc.py path inside the local venv across platforms."""
+    root = get_project_root()
+    py_ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    candidates = [
+        os.path.join(root, ".venv", "lib", py_ver, "site-packages", "havsfunc.py"),
+        os.path.join(root, ".VENV", "lib", py_ver, "site-packages", "havsfunc.py"),
+        os.path.join(root, ".venv", "Lib", "site-packages", "havsfunc.py"),
+        os.path.join(root, ".VENV", "Lib", "site-packages", "havsfunc.py"),
+    ]
+
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+
+    # If neither exists yet, return preferred platform path
+    if sys.platform != "win32":
+        return candidates[0]
+    return os.path.join(root, ".venv", "Lib", "site-packages", "havsfunc.py")
 
 
 def _read_text(path_value: str) -> str:
@@ -29,6 +45,38 @@ def _apply_base_patches(content: str) -> str:
     content, _ = _replace_text(content, "get_core", "vs.get_core()", "vs.core")
     content, _ = _replace_regex(content, "remove__global", r",\s*_global\s*=\s*[a-zA-Z0-9_]+", "")
     content, _ = _replace_regex(content, "remove__lambda", r",\s*_lambda\s*=\s*[a-zA-Z0-9_]+", "")
+    content, _ = _replace_regex(
+        content,
+        "guard_adjust_import",
+        r"^import\s+adjust\b.*$",
+        "try:\n    import adjust\nexcept ImportError:\n    adjust = None",
+        flags=re.MULTILINE,
+    )
+    bob_fmtc_pattern = (
+        r"^(?P<indent>[ \t]*)clip\s*=\s*clip\.std\.SeparateFields\(tff=tff\)\.fmtc\.resample\("
+        r"scalev=2,\s*kernel='bicubic',\s*a1=b,\s*a2=c,\s*interlaced=1,\s*interlacedd=0\)"
+    )
+
+    def _replace_bob_fmtc(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        return (
+            f"{indent}try:\n"
+            f"{indent}    clip = clip.std.SeparateFields(tff=tff).fmtc.resample(\n"
+            f"{indent}        scalev=2, kernel='bicubic', a1=b, a2=c, interlaced=1, interlacedd=0\n"
+            f"{indent}    )\n"
+            f"{indent}except Exception:\n"
+            f"{indent}    clip = clip.std.SeparateFields(tff=tff).resize.Bicubic(\n"
+            f"{indent}        height=clip.height, filter_param_a=b, filter_param_b=c\n"
+            f"{indent}    )"
+        )
+
+    content, _ = _replace_regex(
+        content,
+        "bob_fmtc_fallback",
+        bob_fmtc_pattern,
+        _replace_bob_fmtc,
+        flags=re.MULTILINE,
+    )
     return content
 
 
@@ -196,7 +244,8 @@ def _replace_regex_in_function_block(
     lines = content.splitlines(keepends=True)
     block_bounds = _find_top_level_function_block(lines, function_name)
     if block_bounds is None:
-        return _replace_regex("", patch_name, pattern, repl, flags=flags, required=required)
+        _, match_count = _replace_regex("", patch_name, pattern, repl, flags=flags, required=required)
+        return content, match_count
 
     start_index, end_index = block_bounds
     block_content = "".join(lines[start_index:end_index])
@@ -339,6 +388,38 @@ def _apply_legacy_device_patch(content: str) -> str:
     return _apply_opencl_partial_patches(content, qinterp_patched)
 
 
+def _apply_nnedi3cl_only_patch(content: str) -> str:
+    """Avoid resolving EEDI3CL when QTGMC is using its default NNEDI3 mode."""
+    if "if EdiMode in ('eedi3', 'eedi3+nnedi3'):" in content:
+        return content
+
+    pattern = (
+        r"(?P<indent>^[ \t]*)eedi3 = partial\(core\.eedi3m\.EEDI3CL, "
+        r"alpha=alpha, beta=beta, gamma=gamma, nrad=nrad, mdis=EdiMaxD, "
+        r"vcheck=vcheck, device=device\)"
+    )
+
+    def replacement(match: re.Match[str]) -> str:
+        """Build EEDI3CL only for QTGMC modes that actually use it."""
+        indent = match.group("indent")
+        return (
+            f"{indent}eedi3 = None\n"
+            f"{indent}if EdiMode in ('eedi3', 'eedi3+nnedi3'):\n"
+            f"{indent}    eedi3 = partial(core.eedi3m.EEDI3CL, alpha=alpha, beta=beta, "
+            f"gamma=gamma, nrad=nrad, mdis=EdiMaxD, vcheck=vcheck, device=device)"
+        )
+
+    updated_content, _ = _replace_regex_in_function_block(
+        content,
+        "QTGMC_Interpolate",
+        "lazy_eedi3cl",
+        pattern,
+        replacement,
+        flags=re.MULTILINE,
+    )
+    return updated_content
+
+
 def _replace_text(content, patch_name, old, new, required=False):
     """Apply a literal text replacement and track whether it matched."""
     match_count = content.count(old)
@@ -374,6 +455,7 @@ def main():
     content = _read_text(file_path)
     content = _apply_base_patches(content)
     content = _apply_legacy_device_patch(content)
+    content = _apply_nnedi3cl_only_patch(content)
     _write_text(file_path, content)
 
     print("Patched havsfunc.py with robust device support")

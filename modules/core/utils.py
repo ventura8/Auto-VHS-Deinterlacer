@@ -2,6 +2,7 @@
 
 import atexit
 import contextlib
+import functools
 import logging
 import os
 import platform
@@ -12,6 +13,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import List
 
 # ==============================================================================
@@ -35,6 +37,14 @@ logger.setLevel(logging.DEBUG)
 DLL_DIRECTORY_HANDLES: List[object] = []
 
 
+class _VapourSynthApi3WarningFilter(logging.Filter):
+    """Hide VapourSynth's non-actionable legacy plugin deprecation notices."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Keep all VapourSynth records except the repeated API3 notices."""
+        return "is using API3 which is deprecated" not in record.getMessage()
+
+
 def _is_python_launcher_name(base_name: str) -> bool:
     """Return whether a command basename matches a Python launcher."""
     return base_name in {"python", "python.exe", "py", "py.exe"} or base_name.startswith("python")
@@ -43,12 +53,6 @@ def _is_python_launcher_name(base_name: str) -> bool:
 def _is_vspipe_script_name(base_name: str) -> bool:
     """Return whether a command basename looks like a Python vspipe wrapper."""
     return base_name.startswith("vspipe") and base_name.endswith(".py")
-
-
-def _is_windows_vspipe_launcher(executable_path: str, base_name: str) -> bool:
-    """Return whether a Windows Scripts entry point is launching vspipe."""
-    scripts_segment = f"{os.sep}scripts{os.sep}"
-    return scripts_segment in executable_path and base_name.startswith("vspipe") and base_name.endswith(".exe")
 
 
 def is_python_vspipe_launcher(vspipe_exe):
@@ -60,17 +64,57 @@ def is_python_vspipe_launcher(vspipe_exe):
     base = os.path.basename(exe)
     if _is_python_launcher_name(base):
         return True
-    if _is_windows_vspipe_launcher(exe, base):
-        return True
     return _is_vspipe_script_name(base)
 
 
-def _resolve_venv_root(base_dir: str) -> str:
+def resolve_venv_root(base_dir: str) -> str:
     """Return the preferred local venv root, falling back to the current interpreter."""
     venv_root = os.path.join(base_dir, ".venv")
     if os.path.exists(venv_root):
         return venv_root
+    venv_upper = os.path.join(base_dir, ".VENV")
+    if os.path.exists(venv_upper):
+        return venv_upper
     return os.path.dirname(os.path.dirname(sys.executable))
+
+
+def resolve_vspipe_executable(base_dir: str) -> str:
+    """Find vspipe on PATH or in the selected project virtual environment."""
+    if vspipe_exe := shutil.which("vspipe"):
+        return vspipe_exe
+
+    venv_root = resolve_venv_root(base_dir)
+    script_dir = "Scripts" if os.name == "nt" else "bin"
+    executable = "vspipe.exe" if os.name == "nt" else "vspipe"
+    candidate = os.path.join(venv_root, script_dir, executable)
+    return candidate if os.path.isfile(candidate) else "vspipe"
+
+
+def _find_unix_site_packages(lib_dir: str) -> str | None:
+    """Find site-packages directory in Unix lib/ directory."""
+    try:
+        candidates = sorted(Path(lib_dir).glob("python*/site-packages")) if os.path.exists(lib_dir) else []
+        for cand in candidates:
+            if cand.is_dir():
+                return str(cand)
+    except OSError:
+        pass
+    return None
+
+
+def _resolve_site_packages_dir(venv_root: str) -> str:
+    """Return the site-packages directory inside a virtual environment for the current platform."""
+    win_path = os.path.join(venv_root, "Lib", "site-packages")
+    if os.path.exists(win_path):
+        return win_path
+
+    unix_candidate = _find_unix_site_packages(os.path.join(venv_root, "lib"))
+    if unix_candidate:
+        return unix_candidate
+
+    py_ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    unix_fallback = os.path.join(venv_root, "lib", py_ver, "site-packages")
+    return unix_fallback if platform.system() != "Windows" else win_path
 
 
 def _get_vapoursynth_plugin_dir(vs_root: str) -> str:
@@ -97,8 +141,7 @@ def _set_vspipe_environment(env: dict[str, str], venv_root: str):
     if not os.path.exists(vs_root):
         return
 
-    env["PYTHONHOME"] = vs_root
-    env["PYTHONPATH"] = os.path.join(venv_root, "Lib", "site-packages")
+    env["PYTHONPATH"] = _resolve_site_packages_dir(venv_root)
     existing_path = env.get("PATH", "")
     extra_path = os.pathsep.join(_build_vspipe_path_entries(vs_root))
     env["PATH"] = (existing_path + os.pathsep + extra_path) if existing_path else extra_path
@@ -111,7 +154,7 @@ def get_vspipe_env():
         env.pop("PYTHONHOME", None)
         env.pop("PYTHONPATH", None)
         base_dir = get_project_root()
-        _set_vspipe_environment(env, _resolve_venv_root(base_dir))
+        _set_vspipe_environment(env, resolve_venv_root(base_dir))
     except (OSError, ValueError, RuntimeError, KeyError):
         pass
     return env
@@ -269,7 +312,7 @@ def setup_environment():
     """Setup FFmpeg and VapourSynth paths from local venv."""
     try:
         base_dir = get_project_root()
-        venv_root = os.path.join(base_dir, ".venv")
+        venv_root = resolve_venv_root(base_dir)
 
         _add_venv_to_path(venv_root)
         _setup_vapoursynth_portable(venv_root)
@@ -294,6 +337,59 @@ def check_requirements():
         log_error(f"CRITICAL ERROR: The following tools are not in your SYSTEM PATH: {', '.join(missing)}")
         log_error("Please install VapourSynth and FFmpeg and add them to your PATH.")
         sys.exit(1)
+
+
+def _vapoursynth_nnedi3cl_renders_frame() -> bool:
+    """Run the legacy NNEDI3CL filter out-of-process to isolate plugin crashes."""
+    probe_script = (
+        "import vapoursynth as vs; "
+        "core = vs.core; "
+        "clip = core.std.BlankClip(width=320, height=240, length=1, format=vs.YUV420P8); "
+        "core.nnedi3cl.NNEDI3CL(clip, field=3, device=0).get_frame(0)"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", probe_script],
+            check=False,
+            timeout=20,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return result.returncode == 0
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
+def _vapoursynth_opencl_plugins_available(core, require_eedi3cl):
+    """Return whether the nnedi3cl (and optionally eedi3m) OpenCL plugins are loaded."""
+    nnedi3cl = getattr(getattr(core, "nnedi3cl", None), "NNEDI3CL", None)
+    eedi3cl = getattr(getattr(core, "eedi3m", None), "EEDI3CL", None)
+    return callable(nnedi3cl) and (not require_eedi3cl or callable(eedi3cl))
+
+
+@functools.lru_cache(maxsize=4)
+def vapoursynth_has_opencl_qtgmc(require_eedi3cl=True, verify_runtime=False):
+    """Return whether the selected QTGMC OpenCL interpolation path is available.
+
+    NNEDI3 is QTGMC's default interpolation mode and needs only
+    ``core.nnedi3cl.NNEDI3CL``. EEDI3 modes additionally need
+    ``core.eedi3m.EEDI3CL``. Keeping that distinction lets modern Windows
+    systems accelerate the default NNEDI3 path even when the legacy EEDI3CL
+    plugin is unavailable.
+    """
+    warning_logger = logging.getLogger("vapoursynth")
+    api3_warning_filter = _VapourSynthApi3WarningFilter()
+    warning_logger.addFilter(api3_warning_filter)
+    try:
+        import vapoursynth as vs  # pylint: disable=import-outside-toplevel
+
+        plugins_available = _vapoursynth_opencl_plugins_available(vs.core, require_eedi3cl)
+        return plugins_available and (not verify_runtime or _vapoursynth_nnedi3cl_renders_frame())
+    except (ImportError, OSError, RuntimeError, AttributeError) as probe_error:
+        log_debug(f"[OPENCL PROBE] VapourSynth OpenCL check failed: {probe_error}")
+        return False
+    finally:
+        warning_logger.removeFilter(api3_warning_filter)
 
 
 def parse_ffmpeg_time(line_str):
@@ -418,17 +514,59 @@ except ImportError:
     winreg = None
 
 
-def get_cpu_name():
-    """Return a friendly CPU model name when available."""
+def _get_linux_cpu_name() -> str | None:
+    """Read CPU model name from /proc/cpuinfo on Linux."""
     try:
-        if winreg:
-            key_path = r"HARDWARE\DESCRIPTION\System\CentralProcessor\0"
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path)
-            processor_name = winreg.QueryValueEx(key, "ProcessorNameString")[0]
-            return processor_name.strip()
-    except OSError:
+        if os.path.exists("/proc/cpuinfo"):
+            with open("/proc/cpuinfo", "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if "model name" in line:
+                        return line.split(":", maxsplit=1)[1].strip()
+    except (OSError, IndexError, ValueError):
         pass
-    return platform.processor()
+    return None
+
+
+def _get_macos_cpu_name() -> str | None:
+    """Read CPU model name using sysctl on macOS."""
+    try:
+        cmd = ["sysctl", "-n", "machdep.cpu.brand_string"]
+        out = subprocess.check_output(cmd, timeout=5).decode().strip()
+        if out:
+            return out
+    except (subprocess.SubprocessError, OSError, ValueError):
+        pass
+    return None
+
+
+def _get_windows_cpu_name() -> str | None:
+    """Read CPU model name from Windows registry."""
+    if not winreg:
+        return None
+    try:
+        key_path = r"HARDWARE\DESCRIPTION\System\CentralProcessor\0"
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as key:
+            processor_name = winreg.QueryValueEx(key, "ProcessorNameString")[0]
+        if processor_name and str(processor_name).strip():
+            return str(processor_name).strip()
+    except (OSError, IndexError, TypeError):
+        pass
+    return None
+
+
+def _get_posix_cpu_name() -> str | None:
+    """Read CPU model name across Linux and macOS."""
+    sys_name = platform.system()
+    if sys_name == "Linux":
+        return _get_linux_cpu_name()
+    if sys_name == "Darwin":
+        return _get_macos_cpu_name()
+    return None
+
+
+def get_cpu_name():
+    """Return a friendly CPU model name across Windows, Linux, and macOS."""
+    return _get_windows_cpu_name() or _get_posix_cpu_name() or platform.processor() or "Unknown CPU"
 
 
 def get_nvidia_gpu_info():
@@ -445,6 +583,34 @@ def get_nvidia_gpu_info():
     except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
     return None, None
+
+
+def has_av1_nvenc_capability():
+    """Return whether FFmpeg can encode one frame with the installed AV1 NVENC stack."""
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        # NVENC rejects very small frames. Use a valid, inexpensive frame so
+        # this probe measures encoder capability instead of input dimensions.
+        "color=c=black:s=256x256:r=1",
+        "-frames:v",
+        "1",
+        "-c:v",
+        "av1_nvenc",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        result = subprocess.run(command, check=False, timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return result.returncode == 0
+    except (subprocess.SubprocessError, OSError):
+        return False
 
 
 def get_gpu_name():
@@ -466,7 +632,7 @@ def _show_banner(cpu, gpu, perf_profile, mode, encoder, config_settings):
     ]
 
     log_info("\n" + "=" * 72)
-    log_info("   Auto VHS Deinterlancer - v1.0.2")
+    log_info("   Auto-VHS-Deinterlacer - v1.1.0")
     log_info(f"   Running on: {os_info}")
     log_info("=" * 72)
     log_info("")
@@ -484,33 +650,30 @@ def _show_banner(cpu, gpu, perf_profile, mode, encoder, config_settings):
     log_info("-" * 72)
 
 
+def _build_ffprobe_entry_cmd(file_path, show_entries, stream_type="v"):
+    """Build an ffprobe command that prints a single bare value for one entry."""
+    cmd = ["ffprobe", "-v", "error"]
+    if stream_type is not None:
+        cmd += ["-select_streams", f"{stream_type}:0"]
+    cmd += ["-show_entries", show_entries, "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)]
+    return cmd
+
+
+def probe_stream_entry(file_path, entry, stream_type="v"):
+    """Return the bare ffprobe value for ``stream=<entry>`` or "" when unavailable."""
+    try:
+        cmd = _build_ffprobe_entry_cmd(file_path, f"stream={entry}", stream_type)
+        return subprocess.check_output(cmd, timeout=10).decode().strip()
+    except (subprocess.SubprocessError, OSError):
+        return ""
+
+
 def get_duration(file_path, stream_type="v"):
     """Get precise duration in seconds."""
-    cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        f"{stream_type}:0",
-        "-show_entries",
-        "stream=duration",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        str(file_path),
-    ]
     try:
-        out = subprocess.check_output(cmd, timeout=10).decode().strip()
+        out = probe_stream_entry(file_path, "duration", stream_type)
         if out == "N/A" or not out:
-            cmd = [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                str(file_path),
-            ]
+            cmd = _build_ffprobe_entry_cmd(file_path, "format=duration", stream_type=None)
             out = subprocess.check_output(cmd, timeout=10).decode().strip()
         return float(out)
     except (subprocess.SubprocessError, OSError, ValueError):
@@ -519,48 +682,24 @@ def get_duration(file_path, stream_type="v"):
 
 def get_fps(file_path):
     """Detects average frame rate."""
-    cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=r_frame_rate",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        str(file_path),
-    ]
     try:
-        out = subprocess.check_output(cmd, timeout=10).decode().strip()
+        out = probe_stream_entry(file_path, "r_frame_rate")
         if "/" in out:
             num, den = map(int, out.split("/"))
             return num / den
         return float(out)
-    except (subprocess.SubprocessError, OSError, ValueError, ZeroDivisionError):
+    except (ValueError, ZeroDivisionError):
         return 29.97  # Fallback
 
 
 def get_start_time(file_path, stream_type="v"):
     """Get stream start_time in seconds."""
-    cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        f"{stream_type}:0",
-        "-show_entries",
-        "stream=start_time",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        str(file_path),
-    ]
     try:
-        out = subprocess.check_output(cmd, timeout=10).decode().strip()
+        out = probe_stream_entry(file_path, "start_time", stream_type)
         if out and out != "N/A":
             return float(out)
         return 0.0
-    except (subprocess.SubprocessError, OSError, ValueError):
+    except (ValueError, TypeError):
         return 0.0
 
 
@@ -576,12 +715,17 @@ __all__ = [
     "run_command",
     "setup_environment",
     "check_requirements",
+    "vapoursynth_has_opencl_qtgmc",
     "parse_ffmpeg_time",
     "cleanup_temp_files",
     "update_progress",
+    "resolve_venv_root",
+    "resolve_vspipe_executable",
     "get_cpu_name",
     "get_nvidia_gpu_info",
+    "has_av1_nvenc_capability",
     "get_gpu_name",
+    "probe_stream_entry",
     "get_duration",
     "get_fps",
     "get_start_time",

@@ -30,7 +30,8 @@ deinterlace_mode: "QTGMC"
 #   - "prores": Apple ProRes 422 HQ (10-bit). Visually lossless, intra-frame.
 #               Recommended for archival masters and editing. Files will be large.
 #   - "av1":    AOMedia Video 1 (SVT-AV1 / NVENC). High-efficiency distribution format.
-#               Uses hardware acceleration (NVENC) if an NVIDIA GPU is detected.
+#               Uses NVIDIA NVENC only after a real FFmpeg probe confirms that
+#               the installed GPU and driver can encode AV1; otherwise SVT-AV1 uses the CPU.
 encoder: "prores"
 
 # ------------------------------------------------------------------------------
