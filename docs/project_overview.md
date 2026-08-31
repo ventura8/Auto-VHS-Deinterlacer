@@ -32,7 +32,8 @@
   - `vspipe.py`: VapourSynth script generation and metadata retrieval.
   - `vspipe_native.py`: Native Python fallback output writer.
 - `.\install.ps1`: Local installer that provisions a pip-backed VapourSynth runtime.
-- `start.bat`: Drag & Drop launcher.
+- `start.bat`: Drag & Drop launcher; supports both `.venv` and `.VENV` and exits
+  cleanly when interactive input is cancelled.
 - `config.yaml`: User settings.
 - `.\run_pipeline_localy.ps1`: Automated lint/test/coverage pipeline.
 

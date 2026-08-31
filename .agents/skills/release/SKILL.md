@@ -22,9 +22,14 @@ Use this skill to document, prepare, and verify releases for Auto-VHS-Deinterlac
      automatically when the tag is pushed; if the file is absent, it falls back to
      GitHub's auto-generated notes.
 1. **Validation Gate Before Release**:
-   - Run the complete local pipeline `.\\run_pipeline_localy.ps1`.
-   - Ensure per-file and total coverage are ≥90%.
+   - Run the complete local pipeline `.\run_pipeline_localy.ps1` (or `./run_pipeline_localy.sh`).
+   - Ensure line coverage is ≥90% for every product file and ≥90% overall;
+     branch coverage is measured and reported but has no separate threshold.
    - Ensure all linters and tests pass cleanly.
+1. **Commit Formatting & Message Discipline**:
+   - Always format the release commit title as `release: vX.Y.Z - <Short Title>`.
+   - Provide a comprehensive, structured description categorizing all changes (Cross-Platform, Automation & Tooling, E2E & Container Infrastructure, CI/CD, Dependencies, Validation).
+   - Use `git commit --amend` to update the commit title and detailed description so the release commit message is complete and accurate before tagging.
 
 ## `_github_description.md` Format
 
@@ -56,13 +61,14 @@ One-paragraph summary of what this release accomplishes.
 Release Progress:
 - [ ] Determine new version number (e.g. 1.0.3)
 - [ ] Update version in pyproject.toml
-- [ ] Sync Poetry lock file: `.\.VENV\Scripts\python.exe -m poetry lock`
-- [ ] Run full local pipeline: `.\run_pipeline_localy.ps1`
+- [ ] Sync Poetry lock file: `.\.VENV\Scripts\python.exe -m poetry lock` (POSIX: `./.venv/bin/python -m poetry lock` or `poetry lock`)
+- [ ] Run full local pipeline: `.\run_pipeline_localy.ps1` (or `./run_pipeline_localy.sh`)
 - [ ] Create/Update full release notes in docs/releases/vX.Y.Z.md
 - [ ] Create GitHub Release body in docs/releases/vX.Y.Z_github_description.md
 - [ ] Verify coverage badge is up to date: assets/coverage.svg
 - [ ] Review diff with `git diff`
+- [ ] Update commit title and detailed description using `git commit --amend`
 - [ ] **Request explicit user confirmation before creating and pushing the release tag**
-- [ ] Commit all changes and tag: `git tag vX.Y.Z && git push origin vX.Y.Z`
+- [ ] Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`
       (pushing the tag triggers .github/workflows/release.yml automatically)
 ```

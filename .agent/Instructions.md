@@ -35,6 +35,7 @@ The workspace provides on-demand agent skills in [`.agents/skills/`](../.agents/
 
 - Prefer the `modules.core.*` and `modules.runtime.*` package paths.
 - Keep lint and test fixes small and localized.
+- Update all relevant Markdown files (`AGENTS.md`, `.agent/*`, `docs/*`, `README.md`) whenever performing work on the project.
 - Do not add `# noqa`, `# pylint: disable`, or other suppressions.
 - Maintain ≥90% test coverage per-file and repository-wide.
 - Use the workspace `.VENV` interpreter for validation.

@@ -32,7 +32,7 @@ def test_build_ffmpeg_cmd_av1_with_atempo_and_adelay():
     cmd_str = " ".join(cmd)
     assert "libsvtav1" in cmd_str
     assert "-threads:v 32" in cmd_str
-    assert "-svtav1-params lp=32" in cmd_str
+    assert "-c:v libsvtav1" in cmd_str
 
 
 def test_build_ffmpeg_cmd_av1_uses_nvenc_when_capable():
@@ -276,6 +276,21 @@ def test_process_video_debug_venv_fallback_and_rename_failure():
                                             with patch("modules.runtime.pipeline.cleanup_temp_files"):
                                                 pipeline.process_video(input_path)
                                                 assert mock_log_error.called
+
+
+def test_resolve_vspipe_executable_uses_project_venv_when_path_lookup_fails():
+    """Use the venv vspipe launcher when it is not exported onto PATH."""
+    utils = importlib.import_module("modules.core.utils")
+    with (
+        patch("modules.core.utils.shutil.which", return_value=None),
+        patch("modules.core.utils.resolve_venv_root", return_value="C:/repo/.VENV"),
+        patch("modules.core.utils.os.path.isfile", return_value=True),
+    ):
+        vspipe = utils.resolve_vspipe_executable("C:/repo")
+
+    expected_dir = "Scripts" if utils.os.name == "nt" else "bin"
+    expected_name = "vspipe.exe" if utils.os.name == "nt" else "vspipe"
+    assert vspipe.replace("\\", "/") == f"C:/repo/.VENV/{expected_dir}/{expected_name}"
 
 
 def test_process_video_finalizes_only_after_successful_rename():

@@ -12,7 +12,7 @@ models for audio separation, hardware-adaptive threading, and
 audio-video synchronization.
 
 - **Version single source of truth**: Pinned in `pyproject.toml`
-  (`[project].version`, currently `1.0.4`).
+  (`[project].version`, currently `1.1.0`).
 - **Runtime Environment**: Windows-first on Python 3.12 (CPython
   64-bit) with virtualenv located at `.VENV`.
 
@@ -36,8 +36,21 @@ audio-video synchronization.
   scripts under `.github/scripts/` are validated via strict linters and metrics.
 - **Mocking Boundaries**: Mock only external boundaries (FFmpeg,
   external VSPipe binary, hardware probing). Never mock owned code.
-- **Validation Interpreter**: Always use `.VENV\Scripts\python.exe`
-  for local checks and test runs.
+- **Prefer Installed Dependencies Over Source Builds**: When a native
+  dependency (VapourSynth plugins such as `ffms2`, FFmpeg, build tools) is
+  already available from the OS package manager, Homebrew, a wheel, or a
+  prebuilt binary, use that. Compiling from source is a last-resort fallback
+  only, guarded so its failure never aborts `install.sh`. This applies to
+  `install.sh`, the Dockerfiles, and the CI/release workflows.
+- **Documentation Synchronization Invariant**: Every time work is performed
+  on the project, update all relevant Markdown files (`AGENTS.md`, `.agent/*`,
+  `docs/*`, `README.md`, etc.) to keep architectural, procedural, and requirement
+  documentation in sync with the codebase.
+- **Validation Interpreter**: The step-by-step commands in the next section
+  are Windows PowerShell and use `.\.VENV\Scripts\python.exe`. On Linux &
+  macOS run the full automated pipeline instead (`./run_pipeline_localy.sh`,
+  interpreter `./.venv/bin/python`), which performs the same checks in the
+  same order.
 
 ## Validation Order & Commands
 
@@ -111,16 +124,15 @@ audio-video synchronization.
 
 1. **Full Automated Local Pipeline**:
 
-   ```powershell
-   .\run_pipeline_localy.ps1
-   ```
+   - Windows (PowerShell): `.\run_pipeline_localy.ps1` (virtual environment at `.VENV`, interpreter at `.\.VENV\Scripts\python.exe`)
+   - Linux & macOS (Bash): `./run_pipeline_localy.sh` (virtual environment at `.venv`, interpreter at `./.venv/bin/python`)
 
 ## Skills Index
 
 The workspace provides on-demand agent skills in `.agents/skills/`:
 
 | Skill | Description | Location |
-| :--- | :--- | :--- |
+| :---------------------------------- | :------------------------------------------------------------------------------ | :--------------------------------------------------------------------------------------------------------------- |
 | **`code-linter`** | Strict linting, formatting, metrics, and zero-suppression checks | [`.agents/skills/code-linter/SKILL.md`](.agents/skills/code-linter/SKILL.md) |
 | **`pipeline-runner`** | Local CI-parity validation pipeline runner and coverage badge sync | [`.agents/skills/pipeline-runner/SKILL.md`](.agents/skills/pipeline-runner/SKILL.md) |
 | **`test-runner`** | Pytest unit, integration, and native test runner with ≥90% coverage enforcement | [`.agents/skills/test-runner/SKILL.md`](.agents/skills/test-runner/SKILL.md) |

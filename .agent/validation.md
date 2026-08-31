@@ -33,3 +33,8 @@
 - Keep Windows path handling explicit when a file path is part of the logic.
 - Maintain coverage above 90% for every Python module and above 90% for
   total repository coverage.
+- Always update all relevant Markdown documentation files when making changes
+  to features, installer logic, architecture, or workflows.
+- Release verification must make packaged POSIX application resources writable
+  before bootstrapping their virtual environment, because package installation
+  places them in root-owned system locations.

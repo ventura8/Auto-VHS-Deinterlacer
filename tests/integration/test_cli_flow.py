@@ -6,6 +6,15 @@ import stat
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from modules.runtime import pipeline
+
+
+def test_exit_prompt_ignores_closed_standard_input():
+    """A console launched without stdin exits cleanly after an early failure."""
+    with patch("sys.argv", ["auto_deinterlancer.py"]):
+        with patch("builtins.input", side_effect=EOFError):
+            getattr(pipeline, "_prompt_before_exit_if_interactive")()
+
 
 def test_setup_environment_full_branches(ad):
     """Cover the vs-plugins fallback and add_dll_directory."""

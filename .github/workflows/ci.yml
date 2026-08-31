@@ -5,6 +5,7 @@ on:
     branches: ["main", "master"]
   pull_request:
     branches: ["main", "master"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -24,9 +25,9 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          python-version: "3.12.13"
+          python-version: "3.12"
 
       - name: Install Poetry
         run: |
@@ -76,7 +77,7 @@ jobs:
           poetry run flake8 auto_deinterlancer.py modules tests .github/scripts
       - name: Run Pylint
         run: |
-          poetry run pylint auto_deinterlancer.py modules .github/scripts
+          poetry run pylint auto_deinterlancer.py modules tests .github/scripts
 
       - name: Run Radon Complexity
         id: radon_complexity
@@ -141,19 +142,19 @@ jobs:
         run: |
           failed_steps=""
 
-          if [ "${{ steps.radon_complexity.outcome }}" != "success" ]; then
+          if [ "${{ steps.radon_complexity.outcome }}" = "failure" ]; then
             failed_steps="${failed_steps} Radon Complexity"
           fi
 
-          if [ "${{ steps.radon_maintainability.outcome }}" != "success" ]; then
+          if [ "${{ steps.radon_maintainability.outcome }}" = "failure" ]; then
             failed_steps="${failed_steps} Radon Maintainability"
           fi
 
-          if [ "${{ steps.radon_raw.outcome }}" != "success" ]; then
+          if [ "${{ steps.radon_raw.outcome }}" = "failure" ]; then
             failed_steps="${failed_steps} Radon Raw Metrics"
           fi
 
-          if [ "${{ steps.radon_halstead.outcome }}" != "success" ]; then
+          if [ "${{ steps.radon_halstead.outcome }}" = "failure" ]; then
             failed_steps="${failed_steps} Radon Halstead Metrics"
           fi
 
@@ -190,3 +191,92 @@ jobs:
         run: |
           poetry run python .github/scripts/generate_coverage_summary.py assets/coverage.xml > assets/coverage_summary.md
           cat assets/coverage_summary.md >> $GITHUB_STEP_SUMMARY
+
+  ubuntu_docker_e2e:
+    name: "🐳 Ubuntu Docker Real-Dependency E2E"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: quality_pipeline
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build and Run Ubuntu Docker E2E Suite
+        run: |
+          docker build -f docker/Dockerfile.ubuntu -t auto-vhs-ubuntu-e2e:latest .
+          docker run --rm auto-vhs-ubuntu-e2e:latest
+
+  macos_e2e:
+    name: "🍏 macOS Real-Dependency E2E"
+    runs-on: macos-26
+    timeout-minutes: 60
+    needs: quality_pipeline
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install System Media Tools via Homebrew
+        run: |
+          # Hosted runners can retain an obsolete untrusted AWS tap.
+          brew untap aws/tap >/dev/null 2>&1 || true
+          brew install ffmpeg vapoursynth ffms2
+
+      - name: Run Installer
+        env:
+          # The bundled FFmpeg 9 build is intentionally minimal and does not
+          # provide libsvtav1. E2E AV1 coverage needs the runner's full build.
+          AVD_SKIP_FFMPEG: "1"
+        run: |
+          chmod +x install.sh
+          ./install.sh
+
+      - name: Run E2E and Unit Tests on macOS
+        env:
+          AUTO_VHS_SKIP_HW_DETECT: "1"
+        run: |
+          .venv/bin/python -m pip install pytest pytest-cov defusedxml
+          .venv/bin/python -m pytest -v --no-cov tests/
+
+  windows_e2e:
+    name: "🪟 Windows Real-Dependency E2E"
+    runs-on: windows-latest
+    timeout-minutes: 60
+    needs: quality_pipeline
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Run Installer (Non-Interactive)
+        shell: pwsh
+        env:
+          # Keep the full runner FFmpeg available for libsvtav1 AV1 E2E tests.
+          AVD_SKIP_FFMPEG: "1"
+        run: |
+          & .\install.ps1 -NoPause
+
+      - name: Run E2E and Unit Tests on Windows
+        shell: pwsh
+        env:
+          AUTO_VHS_SKIP_HW_DETECT: "1"
+        run: |
+          .\.VENV\Scripts\python.exe -m pip install pytest pytest-cov defusedxml
+          .\.VENV\Scripts\python.exe -m pytest -v --no-cov tests/

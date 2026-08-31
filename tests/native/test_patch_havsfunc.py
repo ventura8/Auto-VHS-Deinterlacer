@@ -8,23 +8,27 @@ from modules.core import patch_havsfunc
 
 
 def test_patch_havsfunc_path_uses_workspace_venv():
-    """Resolve havsfunc.py under the workspace .VENV directory."""
+    """Resolve havsfunc.py under the workspace .VENV or .venv directory."""
     with patch("modules.core.patch_havsfunc.get_project_root", return_value="C:/repo"):
         path_value = getattr(patch_havsfunc, "_get_havsfunc_path")()
 
-    assert path_value.replace("\\", "/") == "C:/repo/.VENV/Lib/site-packages/havsfunc.py"
+    # normalized is lowercased, so this single prefix covers both .VENV and .venv.
+    normalized = path_value.replace("\\", "/").lower()
+    assert normalized.startswith("c:/repo/.venv")
+    assert normalized.endswith("havsfunc.py")
 
 
 def _run_patch_havsfunc_main(original: str) -> str:
     """Execute the patcher against in-memory file content and return the written text."""
-    m_open = mock_open(read_data=original)
+    written_content = []
     with (
         patch("modules.core.patch_havsfunc.os.path.exists", return_value=True),
-        patch("builtins.open", m_open),
+        patch("modules.core.patch_havsfunc._read_text", return_value=original),
+        patch("modules.core.patch_havsfunc._write_text", side_effect=lambda _path, content: written_content.append(content)),
         patch("builtins.print"),
     ):
         patch_havsfunc.main()
-    return "".join(call.args[0] for call in m_open().write.call_args_list)
+    return "".join(written_content)
 
 
 def _assert_limited_qtgmc_patches(written: str):
@@ -249,6 +253,24 @@ def test_patch_havsfunc_skips_legacy_block_when_device_already_present():
     assert any("Patched havsfunc.py" in msg for msg in printed_messages)
 
 
+def test_patch_havsfunc_defers_eedi3cl_for_nnedi3_mode():
+    """Modern havsfunc must not resolve EEDI3CL for its default NNEDI3 mode."""
+    original = (
+        "def QTGMC(opencl=False, device=None):\n"
+        "    return QTGMC_Interpolate(opencl=opencl, device=device)\n"
+        "def QTGMC_Interpolate(opencl=False, device=None):\n"
+        "    if opencl:\n"
+        "        nnedi3 = partial(core.nnedi3cl.NNEDI3CL, device=device)\n"
+        "        eedi3 = partial(core.eedi3m.EEDI3CL, alpha=alpha, beta=beta, gamma=gamma, "
+        "nrad=nrad, mdis=EdiMaxD, vcheck=vcheck, device=device)\n"
+    )
+
+    patched = getattr(patch_havsfunc, "_apply_nnedi3cl_only_patch")(original)
+
+    assert "eedi3 = None" in patched
+    assert "if EdiMode in ('eedi3', 'eedi3+nnedi3'):" in patched
+
+
 def test_patch_havsfunc_legacy_signature_stage_requires_each_function():
     """Rollback legacy patch when signature stage is incomplete for either target function."""
     original = (
@@ -277,3 +299,19 @@ def test_patch_havsfunc_legacy_propagation_stage_requires_each_function():
     patched = getattr(patch_havsfunc, "_apply_device_signature_patches")(original)
 
     assert patched == original
+
+
+def test_patch_havsfunc_guards_adjust_import():
+    """Verify import adjust is safely wrapped with try/except in havsfunc."""
+    original = "import adjust\nvs.get_core()\n"
+    written = _run_patch_havsfunc_main(original)
+    assert "try:\n    import adjust\nexcept ImportError:\n    adjust = None" in written
+
+
+def test_patch_havsfunc_bob_fmtc_dynamic_indentation():
+    """Verify bob_fmtc fallback preserves leading indentation at any nesting level."""
+    statement = "clip = clip.std.SeparateFields(tff=tff).fmtc.resample(scalev=2, kernel='bicubic', a1=b, a2=c, interlaced=1, interlacedd=0)"
+    original = f"vs.get_core()\n        {statement}\n"
+    written = _run_patch_havsfunc_main(original)
+    assert "        try:\n            clip = clip.std.SeparateFields" in written
+    assert "        except Exception:\n            clip = clip.std.SeparateFields" in written

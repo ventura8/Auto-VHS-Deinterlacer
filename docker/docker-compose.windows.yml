@@ -1,0 +1,27 @@
+services:
+  windows-test:
+    image: dockurr/windows@sha256:0cff9eb0e7aee9953e55bc682852ca4fdca233145a58ae1ec94f0b0c01a2ed30
+    container_name: auto-vhs-dockurr-windows
+    environment:
+      VERSION: "11"
+      RAM_SIZE: "8G"
+      CPU_CORES: "4"
+      DISK_SIZE: "32G"
+      AUTO_INSTALL: "Y"
+      PROTECT: "Y"
+      VERIFY: "Y"
+      USERNAME: "runner"
+      PASSWORD: "${AUTO_VHS_WINDOWS_PASSWORD:?Set AUTO_VHS_WINDOWS_PASSWORD before starting the Windows test container}"
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "127.0.0.1:8006:8006"
+      - "127.0.0.1:3389:3389/tcp"
+      - "127.0.0.1:3389:3389/udp"
+    volumes:
+      - ../:/shared
+      - ./oem/windows:/oem
+    restart: "no"

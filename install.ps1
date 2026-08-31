@@ -1,5 +1,18 @@
+param(
+    # Suppress the interactive "press any key" prompts so unattended runs
+    # (dockurr/windows OEM setup, CI) can never block on input.
+    [switch]$NoPause
+)
+
 $ErrorActionPreference = "Stop"
 $InstallFailed = $false
+$script:PauseEnabled = -not $NoPause
+
+function Invoke-Pause {
+    if ($script:PauseEnabled) {
+        Pause
+    }
+}
 
 function Initialize-VsRepo7Zip {
     param(
@@ -33,11 +46,36 @@ function Initialize-VsRepo7Zip {
     try {
         Write-Output "   -> 7z.exe not found. Bootstrapping standalone 7-Zip..."
         New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
-        Invoke-WebRequest -Uri $sevenZipUrl -OutFile $tempZipPath
         
-        $downloadedHash = (Get-FileHash -Path $tempZipPath -Algorithm SHA256).Hash
-        if ($downloadedHash -ne $sevenZipExpectedSha256) {
-            throw "7-Zip SHA256 integrity check failed. Expected: $sevenZipExpectedSha256, got: $downloadedHash"
+        $sevenZipSuccess = $false
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            if (Test-Path $tempZipPath) { Remove-Item -Path $tempZipPath -Force -ErrorAction SilentlyContinue }
+            try {
+                Invoke-WebRequest -Uri $sevenZipUrl -OutFile $tempZipPath
+
+                $downloadedHash = (Get-FileHash -Path $tempZipPath -Algorithm SHA256).Hash
+                if ($downloadedHash -eq $sevenZipExpectedSha256) {
+                    $sevenZipSuccess = $true
+                    break
+                }
+                else {
+                    Write-Output "   -> [WARNING] 7-Zip SHA256 integrity check failed on attempt $attempt! Expected: $sevenZipExpectedSha256, got: $downloadedHash"
+                    Remove-Item -Path $tempZipPath -Force -ErrorAction SilentlyContinue
+                    Write-Output "      Deleted corrupt archive; retrying download..."
+                }
+            }
+            catch {
+                $err = $_.Exception.Message
+                Write-Output "   -> [WARNING] 7-Zip download failed on attempt ${attempt}: $err"
+                if (Test-Path $tempZipPath) { Remove-Item -Path $tempZipPath -Force -ErrorAction SilentlyContinue }
+                if ($attempt -lt 3) {
+                    Write-Output "      Retrying download..."
+                }
+            }
+        }
+
+        if (-not $sevenZipSuccess) {
+            throw "7-Zip SHA256 integrity check failed after multiple attempts."
         }
 
         Expand-Archive -Path $tempZipPath -DestinationPath $tempExtractPath -Force
@@ -81,10 +119,15 @@ Write-Output ""
 # 1. Check for Python Availability
 # ==============================================================================
 try {
+    $isWindowsArm64 = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [System.Runtime.InteropServices.Architecture]::Arm64
+    $requiredPythonMinor = "3.12"
+    $pythonAbiTag = "cp312"
+    Write-Output "[INFO] Target runtime: Python $requiredPythonMinor ($([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture); ARM64=$isWindowsArm64)"
+
     $pythonLauncherVersion = $null
     $pythonCommand = $null
     try {
-        $pythonLauncherVersion = py -3.12 --version 2>&1
+        $pythonLauncherVersion = py "-$requiredPythonMinor" --version 2>&1
     }
     catch {
         $pythonLauncherVersion = $null
@@ -92,39 +135,37 @@ try {
 
     if ($LASTEXITCODE -eq 0 -and $pythonLauncherVersion) {
         $pythonVersion = $pythonLauncherVersion
-        $pythonCommand = @("py", "-3.12")
+        $pythonCommand = @("py", "-$requiredPythonMinor")
     }
     else {
         $pythonVersion = python --version 2>&1
         $pythonCommand = @("python")
 
-        if (-not ([regex]::IsMatch($pythonVersion, "Python\s+3\.12\.\d+"))) {
-            $python312Candidate = Join-Path $env:LocalAppData "Programs\Python\Python312\python.exe"
-            if (Test-Path $python312Candidate) {
-                $pythonVersion = & $python312Candidate --version 2>&1
-                if ([regex]::IsMatch($pythonVersion, "Python\s+3\.12\.\d+")) {
-                    $pythonCommand = @($python312Candidate)
+        if (-not ([regex]::IsMatch($pythonVersion, "Python\s+$([regex]::Escape($requiredPythonMinor))\.\d+"))) {
+            $pythonCandidate = Join-Path $env:LocalAppData "Programs\Python\Python$($requiredPythonMinor.Replace('.', ''))\python.exe"
+            if (Test-Path $pythonCandidate) {
+                $pythonVersion = & $pythonCandidate --version 2>&1
+                if ([regex]::IsMatch($pythonVersion, "Python\s+$([regex]::Escape($requiredPythonMinor))\.\d+")) {
+                    $pythonCommand = @($pythonCandidate)
                 }
             }
         }
     }
 
     Write-Output "[INFO] Found Python: $pythonVersion"
-    $pythonVersionMatch = [regex]::Match($pythonVersion, "Python\s+(3\.12\.\d+)")
+    $pythonVersionMatch = [regex]::Match($pythonVersion, "Python\s+($([regex]::Escape($requiredPythonMinor))\.\d+)")
     if (-not $pythonVersionMatch.Success) {
-        Write-Output "[ERROR] Python 3.12 is required. Found: $pythonVersion"
-        Write-Output "Install Python 3.12, then rerun install.ps1."
-        Write-Output "Tip: If Python 3.12 is installed, run this script with: py -3.12 .\install.ps1"
-        Pause
+        Write-Output "[ERROR] Python $requiredPythonMinor is required. Found: $pythonVersion"
+        Write-Output "Install Python $requiredPythonMinor, then rerun install.ps1."
+        Write-Output "Tip: If Python $requiredPythonMinor is installed, run this script with: py -$requiredPythonMinor .\install.ps1"
+        Invoke-Pause
         Exit 1
     }
-
-    $pythonAbiTag = "cp312"
 }
 catch {
     Write-Output "[ERROR] Python is not installed or not in your PATH."
-    Write-Output "Please install Python 3.12 and try again."
-    Pause
+    Write-Output "Please install the required Python runtime and try again."
+    Invoke-Pause
     Exit 1
 }
 
@@ -144,11 +185,11 @@ if (Test-Path $venvPath) {
         }
     }
 
-    if ($existingVenvVersion -and $existingVenvVersion -match "Python\s+3\.12\.") {
-        Write-Output "[.venv] Python 3.12 virtual environment already exists. Skipping creation."
+    if ($existingVenvVersion -and $existingVenvVersion -match "Python\s+$([regex]::Escape($requiredPythonMinor))\.") {
+        Write-Output "[.venv] Python $requiredPythonMinor virtual environment already exists. Skipping creation."
     }
     else {
-        Write-Output "[INFO] Existing .venv is not Python 3.12. Recreating virtual environment..."
+        Write-Output "[INFO] Existing .venv is not Python $requiredPythonMinor. Recreating virtual environment..."
         try {
             Remove-Item -Path $venvPath -Recurse -Force
             if ($pythonCommand.Count -eq 2) {
@@ -160,7 +201,7 @@ if (Test-Path $venvPath) {
         }
         catch {
             Write-Output "[ERROR] Failed to recreate virtual environment."
-            Pause
+            Invoke-Pause
             Exit 1
         }
     }
@@ -177,7 +218,7 @@ else {
     }
     catch {
         Write-Output "[ERROR] Failed to create virtual environment."
-        Pause
+        Invoke-Pause
         Exit 1
     }
 }
@@ -212,12 +253,53 @@ try {
     $havsfuncExpectedSha256 = "4DA2839544B1CE9382DB670B069DC358228251D147DAD91F740A860840E04924"
     $havsfuncDest = "$venvPath\Lib\site-packages\havsfunc.py"
     if (Test-Path "$venvPath\Lib\site-packages\havsfunc") { Remove-Item "$venvPath\Lib\site-packages\havsfunc" -Recurse -Force }
-    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/HomeOfVapourSynthEvolution/havsfunc/r33/havsfunc.py" -OutFile $havsfuncDest
     
-    $havsfuncDownloadedHash = (Get-FileHash -Path $havsfuncDest -Algorithm SHA256).Hash
-    if ($havsfuncDownloadedHash -ne $havsfuncExpectedSha256) {
-        Remove-Item -Path $havsfuncDest -Force -ErrorAction SilentlyContinue
-        throw "havsfunc.py SHA256 integrity check failed. Expected: $havsfuncExpectedSha256, got: $havsfuncDownloadedHash"
+    $havsfuncSuccess = $false
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        if (Test-Path $havsfuncDest) { Remove-Item -Path $havsfuncDest -Force -ErrorAction SilentlyContinue }
+        try {
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/HomeOfVapourSynthEvolution/havsfunc/r33/havsfunc.py" -OutFile $havsfuncDest
+            
+            $havsfuncDownloadedHash = (Get-FileHash -Path $havsfuncDest -Algorithm SHA256).Hash
+            if ($havsfuncDownloadedHash -eq $havsfuncExpectedSha256) {
+                $havsfuncSuccess = $true
+                break
+            }
+            else {
+                Write-Output "   -> [WARNING] havsfunc.py SHA256 integrity check failed on attempt $attempt! Expected: $havsfuncExpectedSha256, got: $havsfuncDownloadedHash"
+                Remove-Item -Path $havsfuncDest -Force -ErrorAction SilentlyContinue
+                Write-Output "      Deleted corrupt file; retrying download..."
+            }
+        }
+        catch {
+            $err = $_.Exception.Message
+            Write-Output "   -> [WARNING] havsfunc.py download failed on attempt ${attempt}: $err"
+            if (Test-Path $havsfuncDest) { Remove-Item -Path $havsfuncDest -Force -ErrorAction SilentlyContinue }
+            if ($attempt -lt 3) {
+                Write-Output "      Retrying download..."
+            }
+        }
+    }
+
+    if (-not $havsfuncSuccess) {
+        throw "havsfunc.py SHA256 integrity check failed after multiple attempts."
+    }
+
+    Write-Output "[INFO] Installing pinned mvsfunc dependency..."
+    $gitCmd = Get-Command "git.exe" -ErrorAction SilentlyContinue
+    if (-not $gitCmd) {
+        $gitCmd = Get-Command "git" -ErrorAction SilentlyContinue
+    }
+    if (-not $gitCmd) {
+        Write-Output "[WARNING] git not found; skipping the pinned mvsfunc install."
+        Write-Output "   -> Install Git and rerun install.ps1 if QTGMC reports a missing mvsfunc module."
+    }
+    else {
+        $mvsfuncCommit = "865c7486ca860d323754ec4774bc4cca540a7076"
+        & "$venvPath\Scripts\python" -m pip install --upgrade "git+https://github.com/HomeOfVapourSynthEvolution/mvsfunc.git@$mvsfuncCommit"
+        if ($LASTEXITCODE -ne 0) {
+            throw "mvsfunc install failed with exit code $LASTEXITCODE"
+        }
     }
 
     # [FIX] Patch havsfunc for VapourSynth API compatibility
@@ -239,7 +321,10 @@ Write-Output "=================================================="
 # 5. Install Local FFmpeg (Self-Contained)
 # ==============================================================================
 $ffmpegDest = "$venvPath\Scripts\ffmpeg.exe"
-if (-not (Test-Path $ffmpegDest)) {
+if ($env:AVD_SKIP_FFMPEG -eq "1") {
+    Write-Output "[INFO] AVD_SKIP_FFMPEG=1 set; using system FFmpeg."
+}
+elseif (-not (Test-Path $ffmpegDest)) {
     Write-Output "[INFO] FFmpeg not found in .venv. Downloading static build with integrity verification..."
     $ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.1-essentials_build.zip"
     $ffmpegExpectedSha256 = "FEC81AE03971D9DD4BE3EBE02E263BD2EC1D789483F931BDBA5F5715E65DA2E9"
@@ -249,11 +334,36 @@ if (-not (Test-Path $ffmpegDest)) {
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         Write-Output "   -> Downloading FFmpeg package..."
-        Invoke-WebRequest -Uri $ffmpegUrl -OutFile $zipPath -UseBasicParsing
+        
+        $ffmpegSuccess = $false
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            if (Test-Path $zipPath) { Remove-Item $zipPath -Force -ErrorAction SilentlyContinue }
+            try {
+                Invoke-WebRequest -Uri $ffmpegUrl -OutFile $zipPath -UseBasicParsing
 
-        $downloadedSha256 = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash
-        if ($downloadedSha256 -ne $ffmpegExpectedSha256) {
-            throw "FFmpeg SHA256 checksum mismatch! Expected: $ffmpegExpectedSha256, got: $downloadedSha256"
+                $downloadedSha256 = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash
+                if ($downloadedSha256 -eq $ffmpegExpectedSha256) {
+                    $ffmpegSuccess = $true
+                    break
+                }
+                else {
+                    Write-Output "   -> [WARNING] FFmpeg SHA256 checksum mismatch on attempt $attempt! Expected: $ffmpegExpectedSha256, got: $downloadedSha256"
+                    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+                    Write-Output "      Deleted corrupt archive; retrying download..."
+                }
+            }
+            catch {
+                $err = $_.Exception.Message
+                Write-Output "   -> [WARNING] FFmpeg download failed on attempt ${attempt}: $err"
+                if (Test-Path $zipPath) { Remove-Item $zipPath -Force -ErrorAction SilentlyContinue }
+                if ($attempt -lt 3) {
+                    Write-Output "      Retrying download..."
+                }
+            }
+        }
+
+        if (-not $ffmpegSuccess) {
+            throw "FFmpeg SHA256 checksum mismatch after multiple attempts! Expected: $ffmpegExpectedSha256"
         }
 
         Write-Output "   -> SHA256 verified successfully. Extracting..."
@@ -560,14 +670,7 @@ if ($vsRepoRunnerPath -and (Test-Path $vsRepoRunnerPath)) {
             }
 
             if ($LASTEXITCODE -ne 0) {
-                Write-Output "   -> [NOTICE] Modern vsrepo CLI call failed; retrying with legacy -p syntax."
-                $useLegacyVsRepoArgs = $true
-                if ($vsRepoRunnerType -eq "exe") {
-                    & $vsRepoRunnerPath -p update
-                }
-                else {
-                    & $venvPython $vsRepoRunnerPath -p update
-                }
+                Write-Output "   -> [NOTICE] vsrepo definition update failed; continuing with bundled definitions."
             }
 
             Write-Output "   -> Running vsrepo install for: $pluginsToInstall"
@@ -671,11 +774,14 @@ $batchContent = @"
 setlocal
 cd /d "%~dp0"
 
-if not exist ".venv\Scripts\python.exe" (
-    echo [ERROR] Virtual environment not found.
-    echo Please run 'install.ps1' - Right-click and Run with PowerShell - first.
-    pause
-    exit /b 1
+if not exist ".venv\Scripts\python.exe" if not exist ".VENV\Scripts\python.exe" (
+    echo [INFO] Virtual environment not found. Running automatic installation...
+    powershell -ExecutionPolicy Bypass -File "%~dp0install.ps1"
+    if %errorlevel% neq 0 (
+        echo [ERROR] Installation failed.
+        pause
+        exit /b 1
+    )
 )
 
 echo Starting Auto-VHS-Deinterlacer...
@@ -688,7 +794,9 @@ shift
 goto loop_args
 
 :run_app
-".venv\Scripts\python.exe" auto_deinterlancer.py %CMD_ARGS%
+set "PYTHON_EXE=.venv\Scripts\python.exe"
+if not exist "%PYTHON_EXE%" set "PYTHON_EXE=.VENV\Scripts\python.exe"
+"%PYTHON_EXE%" auto_deinterlancer.py %CMD_ARGS%
 
 if %errorlevel% neq 0 (
     echo.
@@ -718,8 +826,7 @@ else {
 }
 
 Write-Output ""
-Pause
+Invoke-Pause
 
 if ($InstallFailed) { Exit 1 }
 Exit 0
-

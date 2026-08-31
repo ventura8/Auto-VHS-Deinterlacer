@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "auto-vhs-deinterlacer"
-version = "1.0.4"
+version = "1.1.0"
 description = "Automated deinterlacing and audio synchronization for VHS captures"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -30,13 +30,16 @@ optional = true
 torch = { version = "2.13.0+cu132", source = "pytorch-cu132", markers = "platform_system == 'Windows' and python_version == '3.12' and implementation_name == 'cpython'" }
 torchvision = { version = "0.28.0+cu132", source = "pytorch-cu132", markers = "platform_system == 'Windows' and python_version == '3.12' and implementation_name == 'cpython'" }
 torchaudio = { version = "2.11.0", markers = "platform_system == 'Windows' and python_version == '3.12' and implementation_name == 'cpython'" }
-audio-separator = { version = "^0.44.3", extras = ["gpu"] }
+audio-separator = { version = "^0.44.3", extras = ["gpu"], markers = "platform_system != 'Darwin'" }
 nvidia-cudnn-cu13 = { version = "9.20.0.48", markers = "platform_system == 'Windows' and python_version == '3.12' and implementation_name == 'cpython'" }
 nvidia-cublas = { version = "13.4.0.1", markers = "platform_system == 'Windows' and python_version == '3.12' and implementation_name == 'cpython'" }
-onnxruntime-gpu = "^1.27.0"
-librosa = "^0.11.0"
-nvidia-cuda-runtime = "13.2.75"
-nvidia-cuda-nvrtc = "13.2.78"
+onnxruntime-gpu = { version = "^1.27.0", extras = ["cuda", "cudnn"], markers = "platform_system != 'Darwin'" }
+# Darwin is excluded to match audio-separator above: the numba/llvmlite chain
+# librosa pulls has no macOS x86_64 wheel and would fall back to a source build
+# (needs system LLVM). Prefer no install over building — see AGENTS.md.
+librosa = { version = "^0.11.0", markers = "platform_system != 'Darwin'" }
+nvidia-cuda-runtime = { version = "13.2.75", markers = "platform_system != 'Darwin'" }
+nvidia-cuda-nvrtc = { version = "13.2.78", markers = "platform_system != 'Darwin'" }
 vapoursynth = "==77"
 
 [tool.poetry.group.dev.dependencies]

@@ -38,8 +38,20 @@ settings = {
 
 The script automatically detects NVIDIA GPUs via `nvidia-smi`:
 
-- **OpenCL**: If found, enables `NNEDI3CL` within QTGMC for a massive speedup (approx 4x-10x) vs. CPU-only NNEDI3.
-- **NVENC**: If the encoder is set to `av1`, it uses `av1_nvenc` for near-instant encoding.
+- **OpenCL**: QTGMC's default `NNEDI3` interpolation mode needs `NNEDI3CL`.
+  `EdiMode: eedi3` and `EdiMode: eedi3+nnedi3` additionally require `EEDI3CL`.
+  A one-frame isolated render probe also rejects plugins that crash or fail at
+  runtime. If the selected path is unavailable or unstable, QTGMC safely uses
+  its CPU implementation.
+- **Legacy plugin notices**: The startup probe filters repeated VapourSynth API3
+  deprecation notices from the user-facing console. Processing errors and other
+  VapourSynth warnings remain visible.
+- **NVENC**: With `encoder: av1`, the app uses `av1_nvenc` only after a one-frame
+  FFmpeg probe succeeds. The probe uses a valid 256×256 frame, avoiding false
+  negatives from NVENC's minimum frame-size requirement. GPU detection alone is not sufficient: the GPU, its
+  driver, and the FFmpeg NVENC build must all support AV1 encoding. Otherwise it
+  uses CPU-based `libsvtav1`. NVIDIA Ampere RTX 30-series GPUs, including the
+  RTX 3080 Laptop GPU, do not provide AV1 NVENC encoding.
 
 ## CPU Scaling
 

@@ -10,9 +10,199 @@ permissions:
   contents: read
 
 jobs:
+  package-release-artifacts:
+    name: "📦 Package ${{ matrix.platform }} release artifact"
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Windows
+            runner: windows-latest
+            artifact_type: exe
+          - platform: Linux
+            runner: ubuntu-latest
+            artifact_type: linux-packages
+          - platform: macOS-Intel
+            runner: macos-26-intel
+            macos: true
+            arch: x86_64
+            artifact_type: pkg
+          - platform: macOS-Apple-Silicon
+            runner: macos-26
+            macos: true
+            arch: arm64
+            artifact_type: pkg
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag matches pyproject.toml version
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          TOML_VERSION=$(grep -m 1 '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          if [ "${TAG_VERSION}" != "${TOML_VERSION}" ]; then
+            echo "::error::Tag version (${TAG_VERSION}) does not match pyproject.toml version (${TOML_VERSION})."
+            exit 1
+          fi
+          echo "VERSION=${TAG_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Create Windows installer (EXE)
+        if: matrix.platform == 'Windows'
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            $iscc = "ISCC.exe"
+          }
+          & $iscc /DMyAppVersion="${env:VERSION}" tools/packaging/windows/installer.iss
+          New-Item -ItemType Directory -Path release-dist -Force | Out-Null
+          Copy-Item -Path "dist\Auto-VHS-Deinterlacer-v${env:VERSION}.exe" -Destination "release-dist\"
+
+      - name: Create Linux packages (DEB & RPM)
+        if: matrix.platform == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update && sudo apt-get install -y dpkg rpm
+          mkdir -p release-dist
+          ./tools/packaging/linux/build_deb.sh "${VERSION}" release-dist
+          ./tools/packaging/linux/build_rpm.sh "${VERSION}" release-dist
+
+      - name: Create macOS installer (PKG)
+        if: matrix.macos
+        shell: bash
+        run: |
+          mkdir -p release-dist
+          ./tools/packaging/macos/build_pkg.sh "${VERSION}" "${{ matrix.arch }}" release-dist
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: release-${{ matrix.platform }}
+          path: release-dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  verify-release-artifacts:
+    name: "🧪 Verify ${{ matrix.platform }} release artifact"
+    runs-on: ${{ matrix.runner }}
+    needs: package-release-artifacts
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Windows
+            runner: windows-latest
+          - platform: Linux
+            runner: ubuntu-latest
+          - platform: macOS-Intel
+            runner: macos-26-intel
+            macos: true
+          - platform: macOS-Apple-Silicon
+            runner: macos-26
+            macos: true
+    steps:
+      - name: Checkout source for verification tests
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install macOS media prerequisites
+        if: matrix.macos
+        run: |
+          # Hosted runners can retain an obsolete untrusted AWS tap.
+          brew untap aws/tap >/dev/null 2>&1 || true
+          brew install ffmpeg vapoursynth ffms2
+
+      - name: Download the packaged release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-${{ matrix.platform }}
+          path: release-assets
+
+      - name: Verify and install Linux DEB package
+        if: matrix.platform == 'Linux'
+        shell: bash
+        run: |
+          deb_file=$(ls release-assets/*.deb | head -n 1)
+          sudo dpkg -i "$deb_file" || sudo apt-get install -f -y
+          test -x /opt/auto-vhs-deinterlacer/install.sh
+          test -x /usr/local/bin/auto-vhs-deinterlacer
+
+      - name: Verify and install macOS PKG package
+        if: matrix.macos
+        shell: bash
+        run: |
+          pkg_file=$(ls release-assets/*.pkg | head -n 1)
+          sudo installer -pkg "$pkg_file" -target /
+          test -d /Applications/Auto-VHS-Deinterlacer.app
+          test -x /Applications/Auto-VHS-Deinterlacer.app/Contents/MacOS/Auto-VHS-Deinterlacer
+          test -x /Applications/Auto-VHS-Deinterlacer.app/Contents/Resources/install.sh
+          test -x /usr/local/bin/auto-vhs-deinterlacer
+
+      - name: Verify Windows EXE installer
+        if: matrix.platform == 'Windows'
+        shell: pwsh
+        env:
+          # E2E AV1 scenarios require the runner FFmpeg build with libsvtav1.
+          AVD_SKIP_FFMPEG: "1"
+        run: |
+          $installer = Get-ChildItem release-assets -Filter *.exe | Select-Object -First 1
+          Start-Process -FilePath $installer.FullName -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -Wait
+          $candidatePaths = @(
+            (Join-Path ${env:LOCALAPPDATA} "Programs\Auto-VHS-Deinterlacer"),
+            "C:\Program Files\Auto-VHS-Deinterlacer",
+            "C:\Program Files (x86)\Auto-VHS-Deinterlacer"
+          )
+          $installPath = $candidatePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $installPath) {
+            Write-Error "Windows installer verification failed: installation directory not found in candidate paths."
+            exit 1
+          }
+          Write-Host "Installed to: $installPath"
+          Set-Location $installPath
+          .\install.ps1 -NoPause
+          .\.venv\Scripts\python.exe -m pip install pytest pytest-cov pyyaml defusedxml
+          $env:AUTO_VHS_SKIP_HW_DETECT = "1"
+          .\.venv\Scripts\python.exe -m pytest -v --no-cov "${env:GITHUB_WORKSPACE}\tests\e2e\test_e2e_installed_scenarios.py"
+
+      - name: Run E2E scenarios on installed POSIX application
+        if: matrix.platform != 'Windows'
+        shell: bash
+        env:
+          AUTO_VHS_SKIP_HW_DETECT: "1"
+          # E2E AV1 scenarios require the runner FFmpeg build with libsvtav1.
+          AVD_SKIP_FFMPEG: "1"
+        run: |
+          if [ "${{ matrix.platform }}" = "Linux" ]; then
+            cd /opt/auto-vhs-deinterlacer
+          else
+            cd /Applications/Auto-VHS-Deinterlacer.app/Contents/Resources
+          fi
+          sudo chown -R "$(id -u):$(id -g)" .
+          ./install.sh
+          .venv/bin/python -m pip install pytest pytest-cov pyyaml defusedxml
+          .venv/bin/python -m pytest -v --no-cov "$GITHUB_WORKSPACE/tests/e2e/test_e2e_installed_scenarios.py"
+
   github-release:
     name: "🚀 Publish GitHub Release"
     runs-on: ubuntu-latest
+    needs: verify-release-artifacts
     permissions:
       contents: write
     steps:
@@ -34,6 +224,13 @@ jobs:
           fi
           echo "VERSION=${TAG_VERSION}" >> "$GITHUB_ENV"
 
+      - name: Download platform release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
       - name: Load release notes body
         id: notes
         run: |
@@ -52,6 +249,7 @@ jobs:
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           body_path: ${{ steps.notes.outputs.body_file }}
+          files: release-assets/*
           draft: false
           prerelease: false
           make_latest: true
@@ -61,6 +259,7 @@ jobs:
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           generate_release_notes: true
+          files: release-assets/*
           draft: false
           prerelease: false
           make_latest: true

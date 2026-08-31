@@ -46,20 +46,61 @@ Ryzen 9950X3D) to enable ULTRA profiles.
 - CPU: Automatically scales threads to match your core count.
 - RAM: Automatically adjusts cache based on available memory.
 
-## 🚀 Usage
+## 🚀 Installation & Usage
 
-1. Install once:
-   - Right-click `.\install.ps1` and choose Run with PowerShell.
-   - This creates a local, self-contained Python environment.
-1. Run:
-   - Drag and drop your video file (or folder) onto `start.bat`.
-   - Or double-click `start.bat` and drop files into the window.
-1. Configure:
-   - Edit `config.yaml` to switch between `prores` and `av1`.
+### 📦 Prebuilt Native Installers & Executables (GitHub Releases)
+
+Download the official standalone application / package for your operating system from [Releases](https://github.com/ventura8/Auto-VHS-Deinterlacer/releases):
+
+- **Windows**: Run `Auto-VHS-Deinterlacer-v<VERSION>.exe`
+- **Debian / Ubuntu**: `sudo dpkg -i auto-vhs-deinterlacer_<VERSION>_amd64.deb`
+- **Fedora / RHEL / openSUSE**: `sudo rpm -i auto-vhs-deinterlacer-<VERSION>-1.x86_64.rpm`
+- **macOS**: Double-click `Auto-VHS-Deinterlacer-v<VERSION>-AppleSilicon.pkg` (or `-Intel.pkg`)
+
+### 🛠️ Manual / Source Installation
+
+#### Windows
+
+- Install once: Right-click `.\install.ps1` and choose Run with PowerShell.
+- Run: Drag and drop a video file onto `start.bat` or double-click `start.bat`.
+  The launcher accepts either `.venv` or `.VENV`; if no path is supplied it opens
+  the interactive prompt. Pressing Ctrl+C or sending EOF exits cleanly.
+
+#### Linux & macOS
+
+- Install once: `chmod +x install.sh && ./install.sh`
+- Run: `./start.sh path/to/video.mp4` (or `auto-vhs-deinterlacer path/to/video.mp4` when installed via package)
+
+### Docker & Virtualized Test Containers
+
+- Ubuntu 26.04 (Real Dependencies): `./docker/run_docker_e2e.sh`
+- Windows VM ([`dockurr/windows`](https://hub.docker.com/r/dockurr/windows)): `./docker/run_dockurr_tests.sh --windows`
+- macOS VM ([`dockurr/macos`](https://hub.docker.com/r/dockurr/macos)): `./docker/run_dockurr_tests.sh --macos` (Restricted to genuine Apple hardware in compliance with Apple's macOS EULA; running macOS in containers/VMs on non-Apple hardware is subject to license restrictions.) Requires KVM access through native Docker Engine on a supported Linux host, or on Windows 11 with nested virtualization enabled. Docker Desktop on macOS does not expose the KVM device this container needs.
+
+### Configuration
+
+- Edit `config.yaml` to switch between `prores` and `av1`.
 
 ## 📋 Requirements
 
-- Windows (tested on Windows 11)
+- Windows 10/11, Linux (Ubuntu, Debian, Arch, Fedora), or macOS (Apple Silicon & Intel)
+- Python 3.12 (CPython 64-bit)
+- FFmpeg 9.0: every installer bundles a static build into the local
+  environment (Windows: `.VENV\Scripts`; Linux/macOS: `.venv/bin`, fetched from
+  BtbN / evermeet). On macOS Apple Silicon (arm64), Rosetta 2 is required to run the
+  bundled x86_64 build (`softwareupdate --install-rosetta`), or a native arm64 FFmpeg 9.0
+  build can be placed in `.venv/bin` / system PATH. Set `AVD_SKIP_FFMPEG=1` to use
+  system FFmpeg on any supported platform (for example, a full build with
+  `libsvtav1` for CPU AV1 encoding).
+- VapourSynth: on Windows `install.ps1` pulls the plugin DLLs via `vsrepo`; on
+  Linux/macOS `install.sh` installs the `vapoursynth` wheel (bundles `vspipe`)
+  and assembles the QTGMC plugin stack — `ffms2` is copied from the installed
+  `libffms2` system library when present, and BestSource, fmtconv, mvtools,
+  RemoveGrain, znedi3, EEDI3 and MiscFilters are compiled from source as a
+  fallback. The source-build fallback needs a C/C++ toolchain plus
+  `nasm`, `meson`, `ninja`, `autoconf`/`automake`/`libtool`, `pkg-config`,
+  `cmake` and `git`; the installer auto-installs these via apt/pacman/dnf/brew.
+  Set `AVD_SKIP_VS_PLUGINS=1` to skip the plugin build.
 
 ## Why this exists
 
@@ -81,33 +122,35 @@ This tool solves both automatically.
 - ISO 8601 logging with millisecond precision and timezone offsets.
 - Real-time progress with ETA, timestamp, and speed.
 - Zero-loss pipeline from VapourSynth to FFmpeg.
+- Cross-platform support across Windows, Linux, and macOS with native and fallback modes.
 
 ## 🛠️ Development Requirements
 
-- Windows 10/11
-- Internet connection for first-time setup
+- Operating System: Windows 10/11, Linux, or macOS
 - Python 3.12
 - Coverage policy:
-  Every Python module and total repo coverage must stay above 90%.
+  Maintain ≥90% line coverage per-file and repository-wide across product code (`auto_deinterlancer.py` and `modules/`) with branch coverage tracking; CI/automation scripts under `.github/scripts/` are validated via separate linters and metric gates.
 - Local pipeline:
-  Run `.\run_pipeline_localy.ps1` before pushing.
+  Run `.\run_pipeline_localy.ps1` (PowerShell) or `./run_pipeline_localy.sh` (POSIX bash) before pushing.
 - Dependency profiles:
-  Local and CI validation use light dependencies only.
-  Heavy CUDA and VapourSynth packages are reserved for production installs.
+  Local and CI quality-validation jobs (lint, unit, integration) use lightweight dependencies only.
+  The containerised `ubuntu_docker_e2e` and `macos_e2e` jobs run real-dependency E2E tests;
+  heavy CUDA and VapourSynth packages are reserved for those environments and production installs.
 
 ## 📦 Installation and Usage
 
 1. Install one-time setup:
-   - Right-click `.\install.ps1` and choose Run with PowerShell.
+   - Windows: Right-click `.\install.ps1` and choose Run with PowerShell.
+   - Linux / macOS: Run `./install.sh`.
    - The script will:
-     - Create a secluded `.VENV` environment.
-     - Install main runtime dependencies and the `ml-heavy` group.
-     - Install VapourSynth and initialize `.VENV\vs` runtime folders.
-     - Install required QTGMC plugins with `vsrepo`.
-     - Generate a `start.bat` launcher.
+     - Create a secluded virtual environment (`.VENV` on Windows, `.venv` on Linux / macOS).
+     - Install main runtime dependencies.
+     - Download `havsfunc.py` r33, static `FFmpeg 9.0`, and bootstrap archives with SHA-256 integrity verification, automatic deletion of corrupt files, and retry loops.
+     - Apply device-aware compatibility patches.
+     - Generate a `start.bat` / `start.sh` launcher.
 1. Run:
-   - Method A: Drag and drop files onto `start.bat`.
-   - Method B: Double-click `start.bat` and drop files into the prompt.
+   - Windows: Drag and drop files onto `start.bat`, or run `start.bat <video>`.
+   - Linux / macOS: Execute `./start.sh <video>`.
 1. Processing:
    - The tool initializes, verifies hardware, and starts batch processing.
    - Outputs are saved beside source files with `_deinterlaced` suffixes.
@@ -136,6 +179,12 @@ Run the full local validation pipeline:
 
 ```powershell
 .\run_pipeline_localy.ps1
+```
+
+Or on Linux / macOS:
+
+```bash
+./run_pipeline_localy.sh
 ```
 
 This validates Ruff, Flake8, Pylint, Markdown linting, tests with coverage,

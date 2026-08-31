@@ -6,58 +6,54 @@ import argparse
 import sys
 from pathlib import Path
 
+from coverage_paths import extract_source_roots, resolve_repo_relative
 from defusedxml import ElementTree as et
 
 
-def _normalize_path(value: str) -> str:
-    return value.replace("\\", "/").strip()
-
-
-def _is_python_source(path_str: str) -> bool:
-    normalized = _normalize_path(path_str)
-    if not normalized.endswith(".py"):
+def _is_measured_source(path_str: str) -> bool:
+    """Return whether a repo-relative path is one of the measured source files."""
+    if not path_str.endswith(".py"):
         return False
-
-    allowed_prefixes = (
-        "auto_deinterlancer.py",
-        "modules/",
-        "core/",
-        "runtime/",
-    )
-    if normalized == "auto_deinterlancer.py":
-        return True
-    return normalized.startswith(allowed_prefixes[1:])
+    return path_str == "auto_deinterlancer.py" or path_str.startswith("modules/")
 
 
-def _extract_coverage_entry(cls) -> tuple[str, float] | None:
-    """Parse a Cobertura class node into a normalized file coverage tuple."""
+def _extract_coverage_entry(cls, source_roots: list[str]) -> tuple[str, float] | None:
+    """Parse a Cobertura class node into a repo-relative file coverage tuple."""
     filename = cls.get("filename")
     line_rate_raw = cls.get("line-rate")
     if not filename or line_rate_raw is None:
         return None
 
-    normalized = _normalize_path(filename)
-    if not _is_python_source(normalized):
+    resolved = resolve_repo_relative(filename, source_roots)
+    if not resolved:
         return None
 
     try:
         line_rate = float(line_rate_raw) * 100.0
     except ValueError:
         return None
-    return normalized, line_rate
+    return resolved, line_rate
 
 
-def _read_file_coverages(xml_path: Path) -> list[tuple[str, float]]:
+def _read_file_coverages(xml_path: Path) -> tuple[list[tuple[str, float]], list[str]]:
+    """Return measured per-file coverages plus any entries that could not be classified."""
     tree = et.parse(xml_path)
     root = tree.getroot()
+    source_roots = extract_source_roots(root)
 
     file_coverages: list[tuple[str, float]] = []
+    unclassified: list[str] = []
     for cls in root.findall(".//class"):
-        coverage_entry = _extract_coverage_entry(cls)
-        if coverage_entry is not None:
-            file_coverages.append(coverage_entry)
+        coverage_entry = _extract_coverage_entry(cls, source_roots)
+        if coverage_entry is None:
+            unclassified.append(cls.get("filename") or "<missing filename>")
+            continue
+        if not _is_measured_source(coverage_entry[0]):
+            unclassified.append(coverage_entry[0])
+            continue
+        file_coverages.append(coverage_entry)
 
-    return sorted(file_coverages, key=lambda item: item[0])
+    return sorted(file_coverages, key=lambda item: item[0]), sorted(unclassified)
 
 
 def _print_file_coverages(file_coverages: list[tuple[str, float]], threshold: float):
@@ -69,6 +65,21 @@ def _print_file_coverages(file_coverages: list[tuple[str, float]], threshold: fl
         print(f"  - {path_str}: {pct:.2f}% ({status})")
 
 
+def _print_unclassified(unclassified: list[str]):
+    """Print entries the gate could not attribute to a measured source file."""
+    print("[coverage-gate] Coverage gate failed. Unclassified entries (not gated):")
+    for path_str in unclassified:
+        print(f"  - {path_str}")
+    print("[coverage-gate] Resolve these against the report's <sources> roots or update the gate.")
+
+
+def _print_failures(failures: list[tuple[str, float]]):
+    """Print files that fell below the configured threshold."""
+    print("[coverage-gate] Coverage gate failed. Files below threshold:")
+    for path_str, pct in failures:
+        print(f"  - {path_str}: {pct:.2f}%")
+
+
 def _collect_failures(file_coverages: list[tuple[str, float]], threshold: float) -> list[tuple[str, float]]:
     """Return files whose line coverage is below the configured threshold."""
     return [(path_str, pct) for path_str, pct in file_coverages if pct < threshold]
@@ -77,9 +88,15 @@ def _collect_failures(file_coverages: list[tuple[str, float]], threshold: float)
 def enforce_per_file_coverage(xml_path: Path, threshold: float) -> int:
     """Return process exit code: 0 on pass, 1 on fail."""
     try:
-        file_coverages = _read_file_coverages(xml_path)
+        file_coverages, unclassified = _read_file_coverages(xml_path)
     except (OSError, et.ParseError) as error:
         print(f"[coverage-gate] Failed to parse report {xml_path}: {error}")
+        return 1
+
+    _print_file_coverages(file_coverages, threshold)
+
+    if unclassified:
+        _print_unclassified(unclassified)
         return 1
 
     if not file_coverages:
@@ -87,12 +104,8 @@ def enforce_per_file_coverage(xml_path: Path, threshold: float) -> int:
         return 1
 
     failures = _collect_failures(file_coverages, threshold)
-    _print_file_coverages(file_coverages, threshold)
-
     if failures:
-        print("[coverage-gate] Coverage gate failed. Files below threshold:")
-        for path_str, pct in failures:
-            print(f"  - {path_str}: {pct:.2f}%")
+        _print_failures(failures)
         return 1
 
     print("[coverage-gate] Coverage gate passed.")
