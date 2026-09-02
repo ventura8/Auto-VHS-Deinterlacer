@@ -100,7 +100,7 @@ def test_ubuntu_dockerfile_version():
     assert dockerfile.exists(), "docker/Dockerfile.ubuntu must exist"
     content = dockerfile.read_text(encoding="utf-8")
     assert "FROM ubuntu:26.04" in content
-    assert ".venv/bin/pip install vapoursynth==77" in content
+    assert ".venv/bin/pip install vapoursynth==79" in content
     assert 'ENV PATH="/workspace/.venv/bin:${PATH}"' in content
     _assert_docker_ignore()
 

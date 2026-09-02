@@ -35,7 +35,7 @@ ENV PATH="/workspace/.venv/bin:${PATH}"
 # Run installer script
 RUN chmod +x install.sh run_pipeline_localy.sh \
     && python3.12 -m venv .venv \
-    && .venv/bin/pip install vapoursynth==77 \
+    && .venv/bin/pip install vapoursynth==79 \
     && ./install.sh
 
 # Default command runs full linting, tests, and real E2E pipeline
