@@ -233,7 +233,10 @@ Write-Output "[INFO] Upgrading pip..."
 # 3.5 Install Poetry
 # ==============================================================================
 Write-Output "[INFO] Installing Poetry in .venv..."
-& "$venvPath\Scripts\python" -m pip install poetry==2.4.1
+& "$venvPath\Scripts\python" -m pip install poetry==2.4.2
+if ($LASTEXITCODE -ne 0) {
+    throw "Poetry installation failed with exit code $LASTEXITCODE"
+}
 
 # ==============================================================================
 # 4. Install Python Dependencies
@@ -429,14 +432,17 @@ $vsExtractDir = "$venvPath\vs"
 $venvPython = "$venvPath\Scripts\python.exe"
 $pluginsToInstall = "havsfunc lsmas mvtools nnedi3 nnedi3cl neo_fft3d removegrain fmtconv ffms2 eedi3 eedi3m"
 
-# [R77 STANDARD] Use standard folder names as required by VapourSynth
+# [R79 STANDARD] Use standard folder names as required by VapourSynth
 $pluginsDirName = "vs-plugins"
 $corePluginsDirName = "vs-coreplugins"
 
 # Ensure we have a modern Python package with vspipe.exe available in site-packages.
 try {
-    Write-Output "   -> Ensuring Python vapoursynth package is installed (target: 77)..."
-    & $venvPython -m pip install --upgrade "vapoursynth==77" | Out-Null
+    Write-Output "   -> Ensuring Python vapoursynth package is installed (target: 79)..."
+    & $venvPython -m pip install --upgrade "vapoursynth==79" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "VapourSynth installation failed with exit code $LASTEXITCODE"
+    }
 
     Write-Output "   -> Registering VapourSynth runtime configuration..."
     & "$venvPath\Scripts\vapoursynth.exe" register-install | Out-Null
@@ -494,7 +500,7 @@ try {
     }
 }
 catch {
-    Write-Output "[ERROR] Failed to install or register vapoursynth==77 in venv: $_"
+    Write-Output "[ERROR] Failed to install or register vapoursynth==79 in venv: $_"
     $InstallFailed = $true
 }
 
@@ -552,7 +558,10 @@ if (Test-Path $wheelDir) {
     }
     else {
         Write-Output "   -> Bundled wheel for $pythonAbiTag not found. Installing from PyPI..."
-        & $venvPython -m pip install --upgrade "vapoursynth==77" | Out-Null
+        & $venvPython -m pip install --upgrade "vapoursynth==79" | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "VapourSynth installation failed with exit code $LASTEXITCODE"
+        }
     }
 }
 else {

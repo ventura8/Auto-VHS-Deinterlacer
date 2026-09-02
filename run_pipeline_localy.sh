@@ -37,7 +37,7 @@ step() {
 }
 
 step "Install Poetry"
-"$VENV_PY" -m pip install poetry==2.4.1
+"$VENV_PY" -m pip install poetry==2.4.2
 
 step "Sync Poetry lock file"
 "$VENV_PY" -m poetry check --lock || "$VENV_PY" -m poetry lock

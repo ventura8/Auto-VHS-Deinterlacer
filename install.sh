@@ -99,7 +99,7 @@ echo "[INFO] Upgrading pip..."
 "$VENV_PIP" install --upgrade pip
 
 echo "[INFO] Installing Poetry..."
-"$VENV_PIP" install poetry==2.4.1
+"$VENV_PIP" install poetry==2.4.2
 
 # ------------------------------------------------------------------------------
 # 5. Install Dependencies via Poetry
@@ -110,7 +110,7 @@ echo "[INFO] Installing project runtime dependencies..."
 if [ "${AVD_SKIP_ML_HEAVY:-0}" = "1" ]; then
     echo "   -> AVD_SKIP_ML_HEAVY=1 set; installing VapourSynth without optional ML dependencies."
     "$VENV_PYTHON" -m poetry install -v --only main --no-root
-    "$VENV_PYTHON" -m pip install "vapoursynth==77"
+    "$VENV_PYTHON" -m pip install "vapoursynth==79"
 else
     "$VENV_PYTHON" -m poetry install -v --only main,ml-heavy --no-root
 fi
@@ -189,6 +189,9 @@ fi
 #   znedi3           - the default QTGMC edge-directed interpolator
 #   eedi3m           - referenced unconditionally by havsfunc QTGMC_Interpolate
 #   misc             - MiscFilters (Hysteresis) used by QTGMC noise paths
+#   nnedi3cl         - OPTIONAL OpenCL interpolator; enables GPU QTGMC
+#   fft3dfilter      - OPTIONAL denoiser; required by every QTGMC noise
+#                      path (EZDenoise > 0 or NoiseProcess >= 1)
 # Set AVD_SKIP_VS_PLUGINS=1 to skip this section.
 echo "[INFO] Configuring VapourSynth for this virtual environment..."
 
@@ -201,10 +204,13 @@ PY
 }
 
 REQUIRED_PLUGINS="ffms2 bs fmtc mv rgvs znedi3 eedi3m misc"
+# Optional: absent on hosts without OpenCL. Included in the "already present"
+# gate so a stack missing only the GPU plugin still enters the build section.
+OPTIONAL_PLUGINS="nnedi3cl fft3dfilter"
 
 if [ "${AVD_SKIP_VS_PLUGINS:-0}" = "1" ]; then
     echo "   -> AVD_SKIP_VS_PLUGINS=1 set; skipping VapourSynth plugin build."
-elif vs_has $REQUIRED_PLUGINS; then
+elif vs_has $REQUIRED_PLUGINS $OPTIONAL_PLUGINS; then
     echo "   -> VapourSynth plugin stack already present."
 else
     echo "[INFO] Building VapourSynth plugin stack (QTGMC) from source..."
@@ -250,12 +256,13 @@ else
             $SUDO apt-get update -qq && $SUDO apt-get install -y --no-install-recommends \
                 build-essential nasm meson ninja-build autoconf automake libtool \
                 pkg-config cmake git libfftw3-dev libxxhash-dev libavformat-dev \
-                libavcodec-dev libavutil-dev libswscale-dev libswresample-dev || \
+                libavcodec-dev libavutil-dev libswscale-dev libswresample-dev \
+                libboost-filesystem-dev libboost-system-dev opencl-headers ocl-icd-opencl-dev || \
                 echo "[WARN] Toolchain package install failed; plugin build may not complete."
         elif [ -f /etc/arch-release ]; then
-            $SUDO pacman -S --needed --noconfirm base-devel nasm meson ninja autoconf automake libtool pkgconf cmake git fftw xxhash ffmpeg || true
+            $SUDO pacman -S --needed --noconfirm base-devel nasm meson ninja autoconf automake libtool pkgconf cmake git fftw xxhash ffmpeg boost opencl-headers ocl-icd || true
         elif [ -f /etc/fedora-release ]; then
-            $SUDO dnf install -y gcc gcc-c++ make nasm meson ninja-build autoconf automake libtool pkgconf-pkg-config cmake git fftw-devel xxhash-devel ffmpeg-free-devel || true
+            $SUDO dnf install -y gcc gcc-c++ make nasm meson ninja-build autoconf automake libtool pkgconf-pkg-config cmake git fftw-devel xxhash-devel ffmpeg-free-devel boost-devel opencl-headers ocl-icd-devel || true
         else
             echo "[WARN] Unknown platform; install a C/C++ toolchain plus nasm, meson, ninja, autotools manually."
         fi
@@ -379,6 +386,54 @@ EOF
                 || echo "[WARN] [znedi3] built, but copying the plugin or its weights failed."
         else
             echo "[WARN] [znedi3] build failed (see $VS_BUILD_DIR/znedi3.log)"
+        fi
+    fi
+
+    # fft3dfilter (OPTIONAL): QTGMC calls fft3dfilter for every noise-processing
+    # path, so without it EZDenoise > 0 or NoiseProcess >= 1 raises AttributeError
+    # and the generated script silently degrades to the Bob fallback. Native API4,
+    # so it builds against the wheel headers with no extra flags. Needs fftw3f,
+    # which the toolchain step already installs.
+    if ! vs_has fft3dfilter; then
+        vs_build_meson fft3dfilter https://github.com/myrsloik/VapourSynth-FFT3DFilter.git \
+            && vs_has fft3dfilter && echo "   -> [fft3dfilter] QTGMC denoising available." \
+            || echo "[WARN] [fft3dfilter] unavailable; QTGMC denoise options will fall back to Bob."
+    fi
+
+    # nnedi3cl (OPTIONAL, GPU): the OpenCL interpolator QTGMC uses when
+    # manual_settings.use_gpu_opencl is on and EdiMode is the default nnedi3.
+    # Without it QTGMC silently runs entirely on the CPU. Two quirks make this
+    # build non-obvious, hence the explicit flags:
+    #   * The plugin is still API3, but the VapourSynth wheel ships API4-only
+    #     headers, so the API3 compatibility headers are fetched from the
+    #     matching upstream tag. VapourSynth loads API3 plugins at runtime.
+    #   * Boost.Compute reads cl_image_desc.mem_object, which the OpenCL headers
+    #     only expose when __STRICT_ANSI__ is undefined -- so gnu++14, not c++14.
+    # Failure here is never fatal: QTGMC falls back to the CPU znedi3 path.
+    if ! vs_has nnedi3cl; then
+        echo "   -> [nnedi3cl] building (meson, GPU/OpenCL)..."
+        d="$VS_BUILD_DIR/nnedi3cl"
+        api3="$VS_BUILD_DIR/api3"
+        vs_ver="$("$VENV_PYTHON" -c 'import vapoursynth; print(vapoursynth.core.version_number())' 2>/dev/null || echo "")"
+        mkdir -p "$api3"
+        api3_ok=1
+        for hdr in VapourSynth.h VSHelper.h; do
+            curl -fsSL "https://raw.githubusercontent.com/vapoursynth/vapoursynth/R${vs_ver}/include/$hdr" \
+                -o "$api3/$hdr" || api3_ok=0
+        done
+        if [ "$api3_ok" != 1 ] || [ -z "$vs_ver" ]; then
+            echo "[WARN] [nnedi3cl] could not fetch API3 headers for R${vs_ver:-?}; skipping GPU plugin."
+        elif git clone --depth 1 --recurse-submodules \
+                https://github.com/HomeOfVapourSynthEvolution/VapourSynth-NNEDI3CL.git "$d" >/dev/null 2>&1 \
+            && CXXFLAGS="-I$api3 ${CXXFLAGS:-}" meson setup "$d/build" "$d" --native-file "$NATIVE_FILE" \
+                -Dcpp_std=gnu++14 >"$d/setup.log" 2>&1 \
+            && ninja -C "$d/build" >"$d/build.log" 2>&1; then
+            find "$d/build" -maxdepth 1 \( -name '*.so' -o -name '*.dylib' \) -exec cp {} "$VS_PLUGIN_DIR/" \;
+            [ -f "$VS_PLUGIN_DIR/nnedi3_weights.bin" ] || cp "$d/NNEDI3CL/nnedi3_weights.bin" "$VS_PLUGIN_DIR/" 2>/dev/null || true
+            vs_has nnedi3cl && echo "   -> [nnedi3cl] GPU QTGMC interpolation available." \
+                || echo "[WARN] [nnedi3cl] built but did not load; QTGMC stays on CPU."
+        else
+            echo "[WARN] [nnedi3cl] build failed; QTGMC will run on CPU (see $d/setup.log, $d/build.log)."
         fi
     fi
 

@@ -13,9 +13,9 @@ Status: pass, all analyzed files are grade A.
 | modules/core/__init__.py | A | 100.00 |
 | modules/core/config.py | A | 31.41 |
 | modules/core/patch_havsfunc.py | A | 21.73 |
-| modules/core/utils.py | A | 20.27 |
+| modules/core/utils.py | A | 19.76 |
 | modules/runtime/__init__.py | A | 100.00 |
-| modules/runtime/pipeline.py | A | 19.15 |
+| modules/runtime/pipeline.py | A | 19.17 |
 | modules/runtime/vspipe.py | A | 26.64 |
 | modules/runtime/vspipe_native.py | A | 29.15 |
 | tests/conftest.py | A | 79.85 |
@@ -43,5 +43,6 @@ Status: pass, all analyzed files are grade A.
 | tests/unit/test_plugin_discovery.py | A | 68.68 |
 | tests/unit/test_progress_reporting.py | A | 86.35 |
 | tests/unit/test_runtime_helpers.py | A | 19.72 |
+| tests/unit/test_version_reporting.py | A | 57.76 |
 | tests/unit/test_vspipe_environment.py | A | 55.51 |
 | tests/unit/test_windows_vspipe_environment.py | A | 69.45 |

@@ -104,6 +104,15 @@ performance_profile: "auto"
 
 # manual_settings: Override parameters for specific hardware control.
 manual_settings:
+  # use_gpu_opencl: Route QTGMC's interpolation step through the GPU (OpenCL).
+  #   Only consulted when performance_profile is "manual" -- the "auto" profile
+  #   always enables it when the nnedi3cl plugin is present. Requires that plugin
+  #   (install.sh builds it when OpenCL is available; install.ps1 pulls it via
+  #   vsrepo). Falls back to the CPU interpolator whenever it is missing.
+  #   Note: with slow presets and SourceMatch on, most time is spent in CPU
+  #   motion search, so the GPU path is close to performance-neutral. Measure
+  #   on your own hardware before assuming it is faster.
+  use_gpu_opencl: true
   cpu_threads: "auto"     # Thread count for FFmpeg/VapourSynth concurrency.
   vspipe_prefetch_threads: "auto"  # Queue extra VapourSynth frames (auto = cpu_threads for maximum throughput).
   vspipe_requests: "auto"  # vspipe frame request depth (auto = 2x cpu_threads, capped at 64).

@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import time
+import tomllib
 from datetime import datetime
 from pathlib import Path
 from typing import List
@@ -621,6 +622,21 @@ def get_gpu_name():
     return "Generic / Not Detected"
 
 
+def get_app_version():
+    """Return the project version from pyproject.toml, the documented single source of truth."""
+    pyproject = Path(SCRIPT_DIR) / "pyproject.toml"
+    try:
+        with open(pyproject, "rb") as handle:
+            version = tomllib.load(handle)["project"]["version"]
+    except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError) as error:
+        log_debug(f"[VERSION] Could not read version from {pyproject}: {error}")
+        return "unknown"
+    if isinstance(version, str) and version:
+        return version
+    log_debug(f"[VERSION] Invalid version in {pyproject}: {version!r}")
+    return "unknown"
+
+
 def _show_banner(cpu, gpu, perf_profile, mode, encoder, config_settings):
     os_info = f"{platform.system()} {platform.release()}"
     banner = [
@@ -632,7 +648,7 @@ def _show_banner(cpu, gpu, perf_profile, mode, encoder, config_settings):
     ]
 
     log_info("\n" + "=" * 72)
-    log_info("   Auto-VHS-Deinterlacer - v1.1.0")
+    log_info(f"   Auto-VHS-Deinterlacer - v{get_app_version()}")
     log_info(f"   Running on: {os_info}")
     log_info("=" * 72)
     log_info("")
@@ -705,6 +721,7 @@ def get_start_time(file_path, stream_type="v"):
 
 __all__ = [
     "get_project_root",
+    "get_app_version",
     "is_python_vspipe_launcher",
     "_get_vapoursynth_plugin_dir",
     "get_vspipe_env",
