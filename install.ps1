@@ -233,7 +233,7 @@ Write-Output "[INFO] Upgrading pip..."
 # 3.5 Install Poetry
 # ==============================================================================
 Write-Output "[INFO] Installing Poetry in .venv..."
-& "$venvPath\Scripts\python" -m pip install poetry==2.4.2
+& "$venvPath\Scripts\python" -m pip install poetry==2.4.3
 if ($LASTEXITCODE -ne 0) {
     throw "Poetry installation failed with exit code $LASTEXITCODE"
 }

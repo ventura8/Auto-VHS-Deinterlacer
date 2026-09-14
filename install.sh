@@ -99,7 +99,7 @@ echo "[INFO] Upgrading pip..."
 "$VENV_PIP" install --upgrade pip
 
 echo "[INFO] Installing Poetry..."
-"$VENV_PIP" install poetry==2.4.2
+"$VENV_PIP" install poetry==2.4.3
 
 # ------------------------------------------------------------------------------
 # 5. Install Dependencies via Poetry
@@ -463,6 +463,60 @@ ffmpeg_is_90() {
     case "$_ffv" in *"version n9.0"*|*"version 9.0"*) return 0 ;; *) return 1 ;; esac
 }
 
+# Download, verify and stage the evermeet.cx macOS FFmpeg/FFprobe builds.
+# evermeet.cx publishes exact-versioned macOS (x86_64) builds but ships no
+# checksum file, so the SHA-256 of each archive is pinned here (same pattern as
+# HAVSFUNC_EXPECTED_SHA256 above and the FFmpeg pin in install.ps1). Any archive
+# that does not match is deleted and nothing is installed.
+# Usage: install_darwin_ffmpeg <tmp_dir>   -> sets FF_OK=1 on success.
+# Kept as a self-contained function so tests/unit/test_runtime_helpers.py can
+# execute it against fixture archives with a stubbed curl.
+install_darwin_ffmpeg() {
+    _ff_tmp="$1"
+    FF_VER="9.0.1"
+    FFMPEG_ZIP_EXPECTED_SHA256="8a8c9e549983409fe6604b9aa665648b7a5def9407fe814c39c8b2ea7f64a48f"
+    FFPROBE_ZIP_EXPECTED_SHA256="d13f35db03456b7f65b7edb6437c86e23810fbfe91795e571f5b77211343b4f1"
+    FF_GOT_ALL=1
+    for tool in ffmpeg ffprobe; do
+        case "$tool" in
+            ffmpeg)  FF_ZIP_EXPECT="$FFMPEG_ZIP_EXPECTED_SHA256" ;;
+            ffprobe) FF_ZIP_EXPECT="$FFPROBE_ZIP_EXPECTED_SHA256" ;;
+        esac
+        if ! curl -fsSL "https://evermeet.cx/ffmpeg/${tool}-${FF_VER}.zip" -o "$_ff_tmp/${tool}.zip"; then
+            FF_GOT_ALL=0
+            continue
+        fi
+        FF_ZIP_GOT="$(sha256_of "$_ff_tmp/${tool}.zip")"
+        if [ "$FF_ZIP_GOT" != "$FF_ZIP_EXPECT" ]; then
+            echo "[WARN] ${tool}-${FF_VER}.zip SHA-256 mismatch (expected $FF_ZIP_EXPECT, got $FF_ZIP_GOT)."
+            echo "       Refusing to install the unverified archive."
+            rm -f "$_ff_tmp/${tool}.zip"
+            FF_GOT_ALL=0
+            continue
+        fi
+        # Extract only the single expected binary, rejecting any path that
+        # would escape the temp dir (zip-slip guard).
+        "$VENV_PYTHON" - "$_ff_tmp/${tool}.zip" "$_ff_tmp" "$tool" <<'PYEOF' || FF_GOT_ALL=0
+import os, sys, zipfile
+zip_path, dest, tool = sys.argv[1:4]
+dest = os.path.realpath(dest)
+with zipfile.ZipFile(zip_path) as zf:
+    names = zf.namelist()
+    if names != [tool]:
+        sys.exit(f"unexpected archive contents for {tool}: {names}")
+    target = os.path.realpath(os.path.join(dest, tool))
+    if os.path.dirname(target) != dest:
+        sys.exit(f"refusing to extract {tool!r} outside {dest}")
+    zf.extract(tool, dest)
+PYEOF
+    done
+    if [ "$FF_GOT_ALL" = 1 ] && [ -f "$_ff_tmp/ffmpeg" ] && [ -f "$_ff_tmp/ffprobe" ]; then
+        cp "$_ff_tmp/ffmpeg" "$_ff_tmp/ffprobe" "$VENV_DIR/bin/"
+        chmod +x "$VENV_DIR/bin/ffmpeg" "$VENV_DIR/bin/ffprobe"
+        FF_OK=1
+    fi
+}
+
 if [ "${AVD_SKIP_FFMPEG:-0}" = "1" ]; then
     echo "[INFO] AVD_SKIP_FFMPEG=1 set; skipping bundled FFmpeg."
 elif ffmpeg_is_90 "$VENV_DIR/bin/ffmpeg" && ffmpeg_is_90 "$VENV_DIR/bin/ffprobe"; then
@@ -472,22 +526,7 @@ else
     FF_TMP="$(mktemp -d)"
     FF_OK=0
     if [ "$OS_TYPE" = "Darwin" ]; then
-        # evermeet.cx publishes exact-versioned macOS (x86_64) builds.
-        FF_VER="9.0.1"
-        FF_GOT_ALL=1
-        for tool in ffmpeg ffprobe; do
-            if curl -fsSL "https://evermeet.cx/ffmpeg/${tool}-${FF_VER}.zip" -o "$FF_TMP/${tool}.zip"; then
-                "$VENV_PYTHON" -c 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \
-                    "$FF_TMP/${tool}.zip" "$FF_TMP" || FF_GOT_ALL=0
-            else
-                FF_GOT_ALL=0
-            fi
-        done
-        if [ "$FF_GOT_ALL" = 1 ] && [ -f "$FF_TMP/ffmpeg" ] && [ -f "$FF_TMP/ffprobe" ]; then
-            cp "$FF_TMP/ffmpeg" "$FF_TMP/ffprobe" "$VENV_DIR/bin/"
-            chmod +x "$VENV_DIR/bin/ffmpeg" "$VENV_DIR/bin/ffprobe"
-            FF_OK=1
-        fi
+        install_darwin_ffmpeg "$FF_TMP"
     else
         case "$(uname -m)" in
             x86_64|amd64)  FF_PLAT="linux64" ;;
