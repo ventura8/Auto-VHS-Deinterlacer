@@ -1,8 +1,15 @@
 """Unit tests for runtime helper behavior in core and runtime modules."""
 
+import hashlib
 import importlib
+import os
+import re
 import runpy
+import shutil
 import signal
+import subprocess
+import sys
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, mock_open, patch
@@ -368,6 +375,200 @@ def test_install_ps1_verifies_download_hashes():
     assert "$havsfuncExpectedSha256" in install_ps1_content
     assert "$mvsfuncCommit" in install_ps1_content
     assert "$ffmpegExpectedSha256" in install_ps1_content
+
+
+# Trusted SHA-256 digests of the evermeet.cx FFmpeg 9.0.1 archives pinned by
+# install.sh. Update these together with FF_VER when the bundled FFmpeg is bumped.
+FFMPEG_ZIP_SHA256 = "8a8c9e549983409fe6604b9aa665648b7a5def9407fe814c39c8b2ea7f64a48f"
+FFPROBE_ZIP_SHA256 = "d13f35db03456b7f65b7edb6437c86e23810fbfe91795e571f5b77211343b4f1"
+
+
+def _read_install_sh() -> str:
+    utils = importlib.import_module("modules.core.utils")
+    return (Path(utils.get_project_root()) / "install.sh").read_text(encoding="utf-8")
+
+
+def _extract_shell_function(script: str, name: str) -> str:
+    """Return the full text of a top-level ``name() { ... }`` function from a shell script."""
+    match = re.search(rf"^{re.escape(name)}\(\) \{{\n.*?^\}}$", script, re.MULTILINE | re.DOTALL)
+    assert match, f"{name}() not found in install.sh"
+    return match.group(0)
+
+
+def test_install_sh_verifies_download_hashes():
+    """Verify that install.sh pins the trusted SHA-256 hashes for every downloaded archive.
+
+    The macOS FFmpeg builds from evermeet.cx ship without a checksum file, so the
+    hashes must be pinned in the script itself (parity with install.ps1). The
+    exact values are asserted so that neither a mistyped nor a placeholder digest
+    can pass this test.
+    """
+    install_sh_content = _read_install_sh()
+    darwin_fn = _extract_shell_function(install_sh_content, "install_darwin_ffmpeg")
+
+    # (haystack, required fragment) pairs; the Darwin branch of the installer must
+    # route through the verified function, which must hash and delete-on-mismatch.
+    required = (
+        (install_sh_content, "HAVSFUNC_EXPECTED_SHA256"),
+        (install_sh_content, f'FFMPEG_ZIP_EXPECTED_SHA256="{FFMPEG_ZIP_SHA256}"'),
+        (install_sh_content, f'FFPROBE_ZIP_EXPECTED_SHA256="{FFPROBE_ZIP_SHA256}"'),
+        (install_sh_content, 'install_darwin_ffmpeg "$FF_TMP"'),
+        (darwin_fn, 'sha256_of "$_ff_tmp/${tool}.zip"'),
+        (darwin_fn, 'rm -f "$_ff_tmp/${tool}.zip"'),
+    )
+    missing = [fragment for haystack, fragment in required if fragment not in haystack]
+    assert missing == []
+    # The Darwin branch must never fall back to an unguarded extractall().
+    assert "extractall" not in install_sh_content
+
+
+def _make_zip(path: Path, members: dict[str, bytes]) -> str:
+    """Write a zip with the given members and return its SHA-256 hex digest."""
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _pin_for(tmp_path: Path, tool: str, members: dict[str, bytes]) -> str:
+    """Digest of a probe archive identical to what the stubbed curl will serve for ``tool``."""
+    return _make_zip(tmp_path / f"probe_{tool}.zip", members)
+
+
+def _run_darwin_ffmpeg_install(tmp_path: Path, archives: dict[str, dict[str, bytes]], *, pin_overrides: dict[str, str]):
+    """Execute install.sh's install_darwin_ffmpeg() against fixture archives with a stubbed curl.
+
+    ``pin_overrides`` maps the pinned-digest variable name to the digest the fixture
+    should be verified against; this substitutes the trusted values in the extracted
+    function text only (install.sh itself is never modified).
+    """
+    script = _read_install_sh()
+    fn_text = _extract_shell_function(script, "install_darwin_ffmpeg")
+    for var, digest in pin_overrides.items():
+        fn_text, count = re.subn(rf'{var}="[0-9a-f]{{64}}"', f'{var}="{digest}"', fn_text)
+        assert count == 1, var
+    sha_fn = _extract_shell_function(script, "sha256_of")
+
+    mirror = tmp_path / "mirror"
+    mirror.mkdir()
+    for tool, members in archives.items():
+        _make_zip(mirror / f"{tool}-9.0.1.zip", members)
+    stub_bin = tmp_path / "stub_bin"
+    stub_bin.mkdir()
+    curl_stub = stub_bin / "curl"
+    # curl -fsSL <url> -o <dest>  ->  copy the mirrored archive for that URL.
+    curl_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'url="${@: -3:1}"; dest="${@: -1}"\n'
+        f'src="{mirror}/$(basename "$url")"\n'
+        '[ -f "$src" ] || exit 22\n'
+        'cp "$src" "$dest"\n',
+        encoding="utf-8",
+    )
+    curl_stub.chmod(0o755)
+
+    venv_dir = tmp_path / "venv"
+    (venv_dir / "bin").mkdir(parents=True)
+    ff_tmp = tmp_path / "ff_tmp"
+    ff_tmp.mkdir()
+    driver = (
+        "set -u\n"
+        f"{sha_fn}\n{fn_text}\n"
+        f'VENV_PYTHON="{sys.executable}"\nVENV_DIR="{venv_dir}"\nFF_OK=0\n'
+        f'install_darwin_ffmpeg "{ff_tmp}"\n'
+        'echo "FF_OK=$FF_OK"\n'
+    )
+    env = {**os.environ, "PATH": f"{stub_bin}{os.pathsep}{os.environ.get('PATH', '')}"}
+    result = subprocess.run(["bash", "-c", driver], capture_output=True, text=True, env=env, check=False)
+    return result, venv_dir / "bin", ff_tmp
+
+
+def _installed_names(bin_dir: Path) -> set[str]:
+    return {p.name for p in bin_dir.iterdir()}
+
+
+# install.sh is the POSIX installer; on Windows `bash` on PATH is typically the WSL
+# launcher (or absent), so the shell-level tests only run on Linux/macOS.
+_needs_bash = pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("bash") is None,
+    reason="requires a POSIX bash (install.sh is not used on Windows)",
+)
+
+_FFMPEG_STUB = b"#!/bin/sh\necho ffmpeg\n"
+_FFPROBE_STUB = b"#!/bin/sh\necho ffprobe\n"
+
+
+@_needs_bash
+def test_install_darwin_ffmpeg_accepts_matching_archives(tmp_path):
+    """Genuine archives (digest matches the pin) are extracted and installed."""
+    archives = {"ffmpeg": {"ffmpeg": _FFMPEG_STUB}, "ffprobe": {"ffprobe": _FFPROBE_STUB}}
+    pins = {
+        "FFMPEG_ZIP_EXPECTED_SHA256": _pin_for(tmp_path, "ffmpeg", archives["ffmpeg"]),
+        "FFPROBE_ZIP_EXPECTED_SHA256": _pin_for(tmp_path, "ffprobe", archives["ffprobe"]),
+    }
+
+    result, bin_dir, _ = _run_darwin_ffmpeg_install(tmp_path, archives, pin_overrides=pins)
+
+    assert (result.returncode, "FF_OK=1" in result.stdout) == (0, True), result.stderr
+    installed = {name: ((bin_dir / name).read_bytes(), os.access(bin_dir / name, os.X_OK)) for name in _installed_names(bin_dir)}
+    assert installed == {"ffmpeg": (_FFMPEG_STUB, True), "ffprobe": (_FFPROBE_STUB, True)}
+
+
+@_needs_bash
+def test_install_darwin_ffmpeg_rejects_digest_mismatch(tmp_path):
+    """A tampered archive is deleted, reported, and nothing is installed."""
+    archives = {"ffmpeg": {"ffmpeg": b"ok"}, "ffprobe": {"ffprobe": b"evil"}}
+    pins = {
+        "FFMPEG_ZIP_EXPECTED_SHA256": _pin_for(tmp_path, "ffmpeg", archives["ffmpeg"]),
+        "FFPROBE_ZIP_EXPECTED_SHA256": "0" * 64,  # will not match the served ffprobe archive
+    }
+
+    result, bin_dir, ff_tmp = _run_darwin_ffmpeg_install(tmp_path, archives, pin_overrides=pins)
+
+    expected_messages = ("ffprobe-9.0.1.zip SHA-256 mismatch", "Refusing to install the unverified archive")
+    assert [msg for msg in expected_messages if msg not in result.stdout] == []
+    # FF_OK stays 0, the rejected archive is deleted, and nothing reaches the venv.
+    assert ("FF_OK=0" in result.stdout, (ff_tmp / "ffprobe.zip").exists(), _installed_names(bin_dir)) == (True, False, set())
+
+
+@_needs_bash
+@pytest.mark.parametrize(
+    "ffprobe_members",
+    [
+        pytest.param({"ffprobe": b"ok", "extra": b"payload"}, id="unexpected-extra-member"),
+        pytest.param({"ffmpeg": b"ok"}, id="wrong-member-name"),
+        pytest.param({"../ffprobe": b"escape"}, id="zip-slip-parent-path"),
+        pytest.param({"/tmp/ffprobe": b"escape"}, id="zip-slip-absolute-path"),
+    ],
+)
+def test_install_darwin_ffmpeg_rejects_bad_archive_members(tmp_path, ffprobe_members):
+    """An archive whose digest matches but whose members are unexpected or escaping is rejected."""
+    archives = {"ffmpeg": {"ffmpeg": b"ok"}, "ffprobe": ffprobe_members}
+    pins = {
+        "FFMPEG_ZIP_EXPECTED_SHA256": _pin_for(tmp_path, "ffmpeg", archives["ffmpeg"]),
+        "FFPROBE_ZIP_EXPECTED_SHA256": _pin_for(tmp_path, "ffprobe", ffprobe_members),
+    }
+
+    result, bin_dir, ff_tmp = _run_darwin_ffmpeg_install(tmp_path, archives, pin_overrides=pins)
+
+    assert ("FF_OK=0" in result.stdout, "unexpected archive contents for ffprobe" in result.stderr) == (True, True)
+    # Nothing may be written to the venv, the temp dir, or (zip-slip) its parent.
+    leaked = [p for p in (bin_dir / "ffprobe", ff_tmp / "ffprobe", tmp_path / "ffprobe") if p.exists()]
+    assert leaked == []
+
+
+@_needs_bash
+def test_install_darwin_ffmpeg_handles_download_failure(tmp_path):
+    """A failed download leaves FF_OK=0 and installs nothing."""
+    archives = {"ffmpeg": {"ffmpeg": b"ok"}}  # ffprobe is not mirrored -> curl exits 22
+    pins = {
+        "FFMPEG_ZIP_EXPECTED_SHA256": _pin_for(tmp_path, "ffmpeg", archives["ffmpeg"]),
+        "FFPROBE_ZIP_EXPECTED_SHA256": "0" * 64,
+    }
+
+    result, bin_dir, _ = _run_darwin_ffmpeg_install(tmp_path, archives, pin_overrides=pins)
+
+    assert ("FF_OK=0" in result.stdout, _installed_names(bin_dir)) == (True, set())
 
 
 def test_get_linux_cpu_name_parses_cpuinfo():

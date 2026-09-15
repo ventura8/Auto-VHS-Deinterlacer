@@ -13,7 +13,7 @@ The installer orchestrates:
 
 1. **Python Interpreter Check**: Ensures Python 3.12 64-bit is installed and available.
 1. **Virtualenv Creation**: Provisions `.VENV` using `python -m venv .VENV`.
-1. **Pip & Poetry Bootstrapping**: Installs pinned `poetry==2.4.1` into `.VENV`.
+1. **Pip & Poetry Bootstrapping**: Installs pinned `poetry==2.4.3` into `.VENV`.
 1. **Downloaded Asset Verification & Retries**: Downloads `7-Zip`, `FFmpeg`, and `havsfunc.py` with strict SHA-256 integrity verification, automatic deletion of corrupt files, and retry logic.
 1. **VapourSynth Pip-Backed Runtime**: Provisions pip wheels and VapourSynth plugins into `.VENV\Lib\site-packages\vapoursynth`.
 1. **Havsfunc Compatibility Patching**: Runs `modules.core.patch_havsfunc` to ensure QTGMC and related VHS restoration filters operate seamlessly on Python 3.12 without deprecation breakage.
@@ -60,7 +60,7 @@ if ($LASTEXITCODE -ne 0) { throw "Python 3.12 64-bit check failed with exit code
 # 2. Pinned Poetry version
 $poetryVerOutput = (& .\.VENV\Scripts\python.exe -m poetry --version)
 if ($LASTEXITCODE -ne 0 -or $poetryVerOutput -notmatch '2\.4\.1') {
-    throw "Poetry version check failed! Expected 2.4.1, got: $poetryVerOutput"
+    throw "Poetry version check failed! Expected 2.4.3, got: $poetryVerOutput"
 }
 
 # 3. VapourSynth runtime & plugins
