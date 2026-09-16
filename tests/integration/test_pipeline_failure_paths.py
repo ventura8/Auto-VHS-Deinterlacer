@@ -9,18 +9,18 @@ from unittest.mock import MagicMock, patch
 
 def test_pipeline_interactive_input_interrupt():
     """Test KeyboardInterrupt in _get_interactive_input."""
-    pipeline = importlib.import_module("modules.runtime.pipeline")
+    inputs = importlib.import_module("modules.runtime.inputs")
 
     with patch("builtins.input", side_effect=KeyboardInterrupt):
-        get_interactive_input = getattr(pipeline, "_get_interactive_input")
+        get_interactive_input = getattr(inputs, "_get_interactive_input")
         files = get_interactive_input({".mp4"})
         assert not files
 
 
 def test_expand_input_path_filters_unsupported_and_processed_files():
     """Direct file inputs should use the same candidate-video filter as CLI paths."""
-    pipeline = importlib.import_module("modules.runtime.pipeline")
-    expand_input_path = getattr(pipeline, "_expand_input_path")
+    inputs = importlib.import_module("modules.runtime.inputs")
+    expand_input_path = getattr(inputs, "_expand_input_path")
 
     supported_path = Path("clip.mp4")
     processed_path = Path("clip_deinterlaced.mp4")
@@ -161,3 +161,40 @@ def test_vspipe_parse_info_fps_edge():
 
     _t, fps, _w, _h, _fmt = parse_info_output("FPS: garbage")
     assert fps is None
+
+
+def test_candidate_filter_excludes_configured_output_suffixes(tmp_path):
+    """A custom output_suffix must keep finished outputs out of the input queue."""
+    inputs = importlib.import_module("modules.runtime.inputs")
+    is_candidate_video = getattr(inputs, "_is_candidate_video")
+    for name in ("tape.mpg", "tape_restored.mov", "tape_av1out.mkv", "tape_deinterlaced_prores.mov"):
+        (tmp_path / name).write_bytes(b"x")
+
+    custom = {"output_suffix": "_restored", "output_suffix_av1": "_av1out"}
+    with patch("modules.runtime.inputs.CONFIG", custom):
+        kept = sorted(p.name for p in tmp_path.iterdir() if is_candidate_video(p, {".mpg", ".mov", ".mkv"}))
+
+    assert kept == ["tape.mpg"]
+
+
+def test_candidate_filter_uses_default_suffixes_when_unconfigured(tmp_path):
+    """With no suffix configured the shipped defaults are still excluded."""
+    inputs = importlib.import_module("modules.runtime.inputs")
+    is_candidate_video = getattr(inputs, "_is_candidate_video")
+    for name in ("tape.mpg", "tape_deinterlaced_prores.mov", "tape_deinterlaced_av1.mkv"):
+        (tmp_path / name).write_bytes(b"x")
+
+    with patch("modules.runtime.inputs.CONFIG", {}):
+        kept = sorted(p.name for p in tmp_path.iterdir() if is_candidate_video(p, {".mpg", ".mov", ".mkv"}))
+
+    assert kept == ["tape.mpg"]
+
+
+def test_candidate_filter_ignores_malformed_suffix_config(tmp_path):
+    """A non-string or empty suffix value is skipped rather than matching everything."""
+    inputs = importlib.import_module("modules.runtime.inputs")
+    is_candidate_video = getattr(inputs, "_is_candidate_video")
+    (tmp_path / "tape.mpg").write_bytes(b"x")
+
+    with patch("modules.runtime.inputs.CONFIG", {"output_suffix": "", "output_suffix_av1": None}):
+        assert is_candidate_video(tmp_path / "tape.mpg", {".mpg"}) is True

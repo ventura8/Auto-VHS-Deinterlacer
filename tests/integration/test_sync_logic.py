@@ -1,233 +1,71 @@
-"""Integration tests for drift correction and sync-guard behavior."""
+"""Integration tests for drift correction and sync-guard behavior.
 
-import stat
+Audio is muxed after all segments are encoded, so the drift decision is
+checked at the two seams that carry it: ``_calculate_audio_sync`` (the
+decision) and ``_build_mux_cmd`` (where the ``atempo`` filter is applied).
+"""
+
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from modules.runtime import pipeline
 
+# Module-private seams, bound the way the rest of the suite binds them.
+_calculate_audio_sync = getattr(pipeline, "_calculate_audio_sync")
+_build_mux_cmd = getattr(pipeline, "_build_mux_cmd")
+
+DRIFT_CONFIG = {
+    "auto_drift_correction": True,
+    "audio_drift_min_seconds": 0.010,
+    "audio_drift_max_percent": 1.5,
+}
+
+
+def _mux_cmd_for(audio_duration: float, video_duration: float, config: dict) -> str:
+    """Return the mux command produced for a given audio/video duration pair."""
+    with patch("modules.runtime.pipeline.get_duration", return_value=audio_duration):
+        with patch("modules.runtime.pipeline.CONFIG", config):
+            with patch("modules.runtime.pipeline.log_info"):
+                atempo = _calculate_audio_sync(Path("test.mp4"), video_duration)
+    with patch.multiple("modules.runtime.pipeline", AUDIO_OFFSET=0.0, AUDIO_CODEC="aac", AUDIO_BITRATE="320k"):
+        return " ".join(_build_mux_cmd(Path("test.mp4"), Path("segments.txt"), Path("out_part.mov"), atempo))
+
 
 def test_drift_logic_negligible():
-    """Test that small drift (<0.010s) results in speed_factor=1.0"""
-    input_p = Path("test.mp4")
-
-    with patch("modules.runtime.pipeline.get_vpy_info", return_value=(3000, 30.0, 720, 576, "YUV420P10")):  # 100.0s NEW video
-        with patch("modules.runtime.pipeline.get_duration", return_value=100.005):  # 100.005s SRC audio (Drift 0.005)
-            with patch("modules.runtime.pipeline.create_vpy_script"):
-                with patch("modules.runtime.pipeline.shutil.which", return_value="/bin/tool"):
-                    with patch("modules.runtime.pipeline.cleanup_temp_files"):
-                        with patch("subprocess.Popen") as mock_popen:
-                            # Setup Popen mocks
-                            p1 = MagicMock()
-                            p1.stderr.readline.return_value = b""
-                            p2 = MagicMock()
-                            p2.stderr.readline.side_effect = ["", "", ""]
-                            p2.poll.side_effect = [None, 0, 0]
-                            p2.returncode = 0
-                            mock_popen.side_effect = [p1, p2]
-
-                            with patch("os.path.exists", return_value=True):  # vspipe exists
-                                # input check, output check
-                                with patch("modules.runtime.pipeline.Path.exists", side_effect=[True, False, False]):
-                                    with patch("modules.runtime.pipeline.Path.stat") as mock_stat:
-                                        mock_stat.return_value.st_mode = stat.S_IFREG
-                                        mock_stat.return_value.st_size = 5000
-
-                                        test_config = {
-                                            "auto_drift_correction": True,
-                                            "audio_sync_offset": 0.0,
-                                            "encoder": "prores",
-                                            "audio_codec": "aac",
-                                            "audio_bitrate": "320k",
-                                        }
-                                        with patch("modules.runtime.pipeline.CONFIG", test_config):
-                                            with patch("modules.runtime.pipeline.HW_SETTINGS", {"cpu_threads": 4, "use_gpu_opencl": False}):
-                                                with patch("modules.core.config.AUDIO_OFFSET", 0.0):
-                                                    with patch("modules.core.config.ENCODER", "prores"):
-                                                        with patch("modules.core.config.AUDIO_CODEC", "aac"):
-                                                            with patch("modules.core.config.AUDIO_BITRATE", "320k"):
-                                                                pipeline.process_video(input_p)
-
-                                                                # Check 2nd Popen call (FFmpeg)
-                                                                assert mock_popen.call_count == 2
-                                                                args, _ = mock_popen.call_args_list[1]
-                                                                cmd_str = " ".join(args[0])
-                                                                # Expect NO atempo filter for negligible drift
-                                                                assert "atempo" not in cmd_str
+    """Small drift (<0.010s) results in no atempo filter."""
+    cmd_str = _mux_cmd_for(audio_duration=100.005, video_duration=100.0, config=DRIFT_CONFIG)
+    assert "atempo" not in cmd_str
+    assert "-c:v copy" in cmd_str
 
 
 def test_drift_logic_negative_ignored():
-    """Test that negative drift (Audio < Video) is IGNORED (Truncation assumption)."""
-    input_p = Path("test.mp4")
-
-    # Video: 100.20s -> 3006 frames @ 30fps
-    # Audio: 100.00s
-    # Drift: Audio is shorter (-0.2s).
-    # Logic: speed_factor = 100 / 100.2 = ~0.998.
-    # NEW BEHAVIOR: Should IGNORE and use 1.0.
-
-    with patch("modules.runtime.pipeline.get_vpy_info", return_value=(3006, 30.0, 720, 576, "YUV420P10")):  # 100.2s
-        with patch("modules.runtime.pipeline.get_duration", return_value=100.0):  # 100.0s
-            with patch("modules.runtime.pipeline.create_vpy_script"):
-                with patch("modules.runtime.pipeline.shutil.which", return_value="/bin/tool"):
-                    with patch("modules.runtime.pipeline.cleanup_temp_files"):
-                        with patch("subprocess.Popen") as mock_popen:
-                            p1 = MagicMock()
-                            p1.stderr.readline.return_value = b""
-                            p2 = MagicMock()
-                            p2.stderr.readline.side_effect = ["", "", ""]
-                            p2.poll.side_effect = [None, 0, 0]
-                            p2.returncode = 0
-                            mock_popen.side_effect = [p1, p2]
-
-                            with patch("os.path.exists", return_value=True):
-                                with patch("modules.runtime.pipeline.Path.exists", side_effect=[True, False, False]):
-                                    with patch(
-                                        "modules.runtime.pipeline.CONFIG",
-                                        {
-                                            "auto_drift_correction": True,
-                                            "drift_guard_thresholds": {"max_drift_percent": 1.5, "min_drift_seconds": 0.010},
-                                            "audio_sync_offset": 0.0,
-                                        },
-                                    ):
-                                        with patch("modules.runtime.pipeline.HW_SETTINGS", {"cpu_threads": 4, "use_gpu_opencl": False}):
-                                            with patch("modules.core.config.AUDIO_OFFSET", 0.0):
-                                                with patch("modules.core.config.ENCODER", "prores"):
-                                                    with patch("modules.core.config.AUDIO_CODEC", "aac"):
-                                                        with patch("modules.core.config.AUDIO_BITRATE", "320k"):
-                                                            pipeline.process_video(input_p)
-
-                                                            # Assert ignored
-                                                            args, _ = mock_popen.call_args_list[1]
-                                                            cmd_str = " ".join(args[0])
-                                                            assert "atempo" not in cmd_str
+    """Negative drift (audio shorter than video) is ignored."""
+    cmd_str = _mux_cmd_for(audio_duration=100.0, video_duration=100.2, config=DRIFT_CONFIG)
+    assert "atempo" not in cmd_str
 
 
 def test_drift_logic_positive_correction():
-    """Test that positive drift (Audio > Video) IS corrected (Dropped frames)."""
-    input_p = Path("test.mp4")
-
-    # Video: 100.00s
-    # Audio: 100.20s
-    # Drift: Audio is longer (Video dropped frames).
-    # Logic: speed_factor = 100.2 / 100.0 = 1.002.
-    # SHOULD CORRECT.
-
-    with patch("modules.runtime.pipeline.get_vpy_info", return_value=(3000, 30.0, 720, 576, "YUV420P10")):  # 100.0s
-        with patch("modules.runtime.pipeline.get_duration", return_value=100.2):  # 100.2s
-            with patch("modules.runtime.pipeline.create_vpy_script"):
-                with patch("modules.runtime.pipeline.shutil.which", return_value="/bin/tool"):
-                    with patch("modules.runtime.pipeline.cleanup_temp_files"):
-                        with patch("subprocess.Popen") as mock_popen:
-                            p1 = MagicMock()
-                            p1.stderr.readline.return_value = b""
-                            p2 = MagicMock()
-                            p2.stderr.readline.side_effect = ["", "", ""]
-                            p2.poll.side_effect = [None, 0, 0]
-                            p2.returncode = 0
-                            mock_popen.side_effect = [p1, p2]
-
-                            with patch("os.path.exists", return_value=True):
-                                with patch("modules.runtime.pipeline.Path.exists", side_effect=[True, False, False]):
-                                    with patch(
-                                        "modules.runtime.pipeline.CONFIG",
-                                        {
-                                            "auto_drift_correction": True,
-                                            "drift_guard_thresholds": {"max_drift_percent": 1.5, "min_drift_seconds": 0.010},
-                                            "audio_sync_offset": 0.0,
-                                        },
-                                    ):
-                                        with patch("modules.runtime.pipeline.HW_SETTINGS", {"cpu_threads": 4, "use_gpu_opencl": False}):
-                                            with patch("modules.core.config.AUDIO_OFFSET", 0.0):
-                                                with patch("modules.core.config.ENCODER", "prores"):
-                                                    with patch("modules.core.config.AUDIO_CODEC", "aac"):
-                                                        with patch("modules.core.config.AUDIO_BITRATE", "320k"):
-                                                            pipeline.process_video(input_p)
-
-                                                            # Assert Corrected (Speed > 1.0)
-                                                            args, _ = mock_popen.call_args_list[1]
-                                                            cmd_str = " ".join(args[0])
-                                                            assert "atempo=1.002" in cmd_str
+    """Positive drift (audio longer than video) is corrected with atempo."""
+    cmd_str = _mux_cmd_for(audio_duration=100.2, video_duration=100.0, config=DRIFT_CONFIG)
+    assert "-af atempo=1.002000" in cmd_str
+    assert "-map 1:a:0?" in cmd_str
 
 
 def test_drift_guard_excessive():
-    """Test that excessive drift (>1.5%) is IGNORED."""
-    input_p = Path("test.mp4")
-
-    # Audio: 102.0s
-    # Video: 100.0s
-    # Drift 2% (Speed factor 1.02)
-
-    with patch("modules.runtime.pipeline.get_vpy_info", return_value=(3000, 30.0, 720, 576, "YUV420P10")):  # 100.0s
-        with patch("modules.runtime.pipeline.get_duration", return_value=102.0):  # 102.0s
-            with patch("modules.runtime.pipeline.create_vpy_script"):
-                with patch("modules.runtime.pipeline.shutil.which", return_value="/bin/tool"):
-                    with patch("modules.runtime.pipeline.cleanup_temp_files"):
-                        with patch("subprocess.Popen") as mock_popen:
-                            p1 = MagicMock()
-                            p1.stderr.readline.return_value = b""
-                            p2 = MagicMock()
-                            p2.stderr.readline.side_effect = ["", "", ""]
-                            p2.poll.side_effect = [None, 0, 0]
-                            p2.returncode = 0
-                            mock_popen.side_effect = [p1, p2]
-
-                            with patch("os.path.exists", return_value=True):
-                                with patch("modules.runtime.pipeline.Path.exists", side_effect=[True, False, False]):
-                                    with patch(
-                                        "modules.runtime.pipeline.CONFIG",
-                                        {
-                                            "auto_drift_correction": True,
-                                            "drift_guard_thresholds": {"max_drift_percent": 1.5, "min_drift_seconds": 0.010},
-                                            "audio_sync_offset": 0.0,
-                                        },
-                                    ):
-                                        with patch("modules.runtime.pipeline.HW_SETTINGS", {"cpu_threads": 4, "use_gpu_opencl": False}):
-                                            with patch("modules.core.config.AUDIO_OFFSET", 0.0):
-                                                with patch("modules.core.config.ENCODER", "prores"):
-                                                    with patch("modules.core.config.AUDIO_CODEC", "aac"):
-                                                        with patch("modules.core.config.AUDIO_BITRATE", "320k"):
-                                                            pipeline.process_video(input_p)
-
-                                                            # Assert ignored
-                                                            args, _ = mock_popen.call_args_list[1]
-                                                            cmd_str = " ".join(args[0])
-                                                            assert "atempo" not in cmd_str
+    """Excessive drift (>1.5%) is ignored by the safety guard."""
+    cmd_str = _mux_cmd_for(audio_duration=102.0, video_duration=100.0, config=DRIFT_CONFIG)
+    assert "atempo" not in cmd_str
 
 
 def test_drift_disabled():
-    """Test that drift correction can be disabled via config"""
-    input_p = Path("test.mp4")
+    """Drift correction can be disabled via config."""
+    cmd_str = _mux_cmd_for(audio_duration=100.5, video_duration=100.0, config={"auto_drift_correction": False})
+    assert "atempo" not in cmd_str
 
-    with patch("modules.runtime.pipeline.get_vpy_info", return_value=(3000, 30.0, 720, 576, "YUV420P10")):  # 100.0s
-        with patch("modules.runtime.pipeline.get_duration", return_value=100.5):  # 0.5s drift (Valid but disabled)
-            with patch("modules.runtime.pipeline.create_vpy_script"):
-                with patch("modules.runtime.pipeline.shutil.which", return_value="/bin/tool"):
-                    with patch("modules.runtime.pipeline.cleanup_temp_files"):
-                        with patch("subprocess.Popen") as mock_popen:
-                            p1 = MagicMock()
-                            p1.stderr.readline.return_value = b""
-                            p2 = MagicMock()
-                            p2.stderr.readline.side_effect = ["", "", ""]
-                            p2.poll.side_effect = [None, 0, 0]
-                            p2.returncode = 0
-                            mock_popen.side_effect = [p1, p2]
 
-                            with patch("os.path.exists", return_value=True):
-                                with patch("modules.runtime.pipeline.Path.exists", side_effect=[True, False, False]):
-                                    with patch("modules.runtime.pipeline.Path.stat") as mock_stat:
-                                        mock_stat.return_value.st_mode = stat.S_IFREG
-                                        mock_stat.return_value.st_size = 5000
-
-                                        test_config = {"auto_drift_correction": False, "audio_sync_offset": 0.0}
-                                        with patch("modules.runtime.pipeline.CONFIG", test_config):
-                                            with patch("modules.runtime.pipeline.HW_SETTINGS", {"cpu_threads": 4, "use_gpu_opencl": False}):
-                                                with patch("modules.core.config.AUDIO_OFFSET", 0.0):
-                                                    with patch("modules.core.config.ENCODER", "prores"):
-                                                        with patch("modules.core.config.AUDIO_CODEC", "aac"):
-                                                            with patch("modules.core.config.AUDIO_BITRATE", "320k"):
-                                                                pipeline.process_video(input_p)
-
-                                                                args, _ = mock_popen.call_args_list[1]
-                                                                cmd_str = " ".join(args[0])
-                                                                assert "atempo" not in cmd_str
+def test_drift_zero_video_duration_is_safe():
+    """A zero video duration never divides by zero and applies no correction."""
+    with patch("modules.runtime.pipeline.get_duration", return_value=5.0):
+        with patch("modules.runtime.pipeline.CONFIG", DRIFT_CONFIG):
+            with patch("modules.runtime.pipeline.log_info"):
+                assert _calculate_audio_sync(Path("test.mp4"), 0.0) == 1.0

@@ -5,6 +5,7 @@
 Studio-Reference VHS Restoration Pipeline
 
 ![Coverage](assets/coverage.svg)
+[![GitHub release downloads](https://img.shields.io/github/downloads/ventura8/Auto-VHS-Deinterlacer/total?label=downloads&logo=github)](https://github.com/ventura8/Auto-VHS-Deinterlacer/releases)
 
 Automated deinterlacing and audio synchronization tool for modernizing VHS
 captures.
@@ -73,7 +74,8 @@ Download the official standalone application / package for your operating system
 
 ### Docker & Virtualized Test Containers
 
-- Ubuntu 26.04 (Real Dependencies): `./docker/run_docker_e2e.sh`
+- Ubuntu 26.04 (Real Dependencies): `./docker/run_docker_e2e.sh` (or `./docker/run_docker_e2e.sh ubuntu`)
+- Fedora 42 (Real Dependencies, dnf path of `install.sh`): `./docker/run_docker_e2e.sh fedora`
 - Windows VM ([`dockurr/windows`](https://hub.docker.com/r/dockurr/windows)): `./docker/run_dockurr_tests.sh --windows`
 - macOS VM ([`dockurr/macos`](https://hub.docker.com/r/dockurr/macos)): `./docker/run_dockurr_tests.sh --macos` (Restricted to genuine Apple hardware in compliance with Apple's macOS EULA; running macOS in containers/VMs on non-Apple hardware is subject to license restrictions.) Requires KVM access through native Docker Engine on a supported Linux host, or on Windows 11 with nested virtualization enabled. Docker Desktop on macOS does not expose the KVM device this container needs.
 
@@ -95,7 +97,10 @@ Download the official standalone application / package for your operating system
 - VapourSynth: on Windows `install.ps1` pulls the plugin DLLs via `vsrepo`; on
   Linux/macOS `install.sh` installs the `vapoursynth` wheel (bundles `vspipe`)
   and assembles the QTGMC plugin stack — `ffms2` is copied from the installed
-  `libffms2` system library when present, and BestSource, fmtconv, mvtools,
+  `libffms2` system library when present (on Fedora, `install.sh` enables the
+  RPM Fusion free repository and installs its full `ffmpeg-libs` together with
+  `ffms2`, because Fedora's own patent-free `libavcodec-free` has no H.264
+  decoder and ffms2 linked against it cannot open H.264 captures), and BestSource, fmtconv, mvtools,
   RemoveGrain, znedi3, EEDI3 and MiscFilters are compiled from source as a
   fallback. The source-build fallback needs a C/C++ toolchain plus
   `nasm`, `meson`, `ninja`, `autoconf`/`automake`/`libtool`, `pkg-config`,
@@ -122,6 +127,8 @@ This tool solves both automatically.
 - ISO 8601 logging with millisecond precision and timezone offsets.
 - Real-time progress with ETA, timestamp, and speed.
 - Zero-loss pipeline from VapourSynth to FFmpeg.
+- Power-loss safe: video is encoded in resumable segments inside one
+  per-video temp folder (`<name>.autovhs-tmp/`), which is removed on success.
 - Cross-platform support across Windows, Linux, and macOS with native and fallback modes.
 
 ## 🛠️ Development Requirements
@@ -162,12 +169,22 @@ plugin loading.
 
 1. Ingest: Load video via FFMS2.
 1. Processing: Apply QTGMC Placebo and archival settings.
-1. Single-pass processing:
-   - Efficiency: Pipe video directly from VapourSynth to FFmpeg.
-   - Sync: Calculate drift before encoding and apply `atempo` as needed.
+1. Segmented processing (`resume_segment_minutes`, default 5):
+   - Efficiency: Pipe video directly from VapourSynth to FFmpeg, one segment
+     at a time, into `<name>.autovhs-tmp/segments/`.
+   - Resume: After a crash or power cut, re-run the same file and finished
+     segments are reused; only the interrupted segment is redone.
    - Encoding:
      - ProRes 422 HQ (10-bit) for archival.
      - Optional AV1 for high-efficiency output.
+1. Long tapes: the index probe's timeout scales with the file, and after the
+   first segment the log projects the output size and the peak disk use during
+   the join (about twice the output, since segments and the joined file coexist
+   briefly); the join is refused, with segments kept, if the drive is short.
+1. Final mux: Segments are joined with stream copy, source audio is added with
+   `atempo` drift correction as needed, and the file is atomically renamed
+   into place. The temp folder is then deleted; every index, script, and
+   partial file lives inside it, so nothing is left beside the source.
 
 ## 📄 License
 

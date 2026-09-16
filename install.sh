@@ -262,7 +262,7 @@ else
         elif [ -f /etc/arch-release ]; then
             $SUDO pacman -S --needed --noconfirm base-devel nasm meson ninja autoconf automake libtool pkgconf cmake git fftw xxhash ffmpeg boost opencl-headers ocl-icd || true
         elif [ -f /etc/fedora-release ]; then
-            $SUDO dnf install -y gcc gcc-c++ make nasm meson ninja-build autoconf automake libtool pkgconf-pkg-config cmake git fftw-devel xxhash-devel ffmpeg-free-devel boost-devel opencl-headers ocl-icd-devel || true
+            $SUDO dnf install -y gcc gcc-c++ make nasm meson ninja-build autoconf automake libtool pkgconf-pkg-config cmake git zlib-devel fftw-devel xxhash-devel ffmpeg-free-devel boost-devel opencl-headers ocl-icd-devel || true
         else
             echo "[WARN] Unknown platform; install a C/C++ toolchain plus nasm, meson, ninja, autotools manually."
         fi
@@ -305,7 +305,7 @@ EOF
             done
             return 1
         fi
-        if ! ls /usr/lib/*/libffms2.so* /usr/lib/libffms2.so* /usr/local/lib/libffms2.so* >/dev/null 2>&1; then
+        if ! ls /usr/lib/*/libffms2.so* /usr/lib/libffms2.so* /usr/lib64/libffms2.so* /usr/local/lib/libffms2.so* >/dev/null 2>&1; then
             if [ -f /etc/debian_version ]; then
                 $SUDO apt-get update -qq >/dev/null 2>&1 || true
                 for _pkg in libffms2-5 libffms2-4 libffms2-dev; do
@@ -314,10 +314,18 @@ EOF
             elif [ -f /etc/arch-release ]; then
                 $SUDO pacman -S --needed --noconfirm ffms2 >/dev/null 2>&1 || true
             elif [ -f /etc/fedora-release ]; then
-                $SUDO dnf install -y ffms2 >/dev/null 2>&1 || true
+                # Fedora's own libavcodec-free carries no H.264 decoder, so ffms2
+                # linked against it cannot open the most common capture format.
+                # RPM Fusion free ships the full FFmpeg as ffmpeg-libs; asking for
+                # it explicitly is required, because "dnf install ffms2" alone is
+                # satisfied by the -free libraries. --allowerasing swaps them out.
+                if ! rpm -q rpmfusion-free-release >/dev/null 2>&1; then
+                    $SUDO dnf install -y "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" >/dev/null 2>&1 || true
+                fi
+                $SUDO dnf install -y --allowerasing ffmpeg-libs ffms2 >/dev/null 2>&1 || true
             fi
         fi
-        for _p in /usr/lib/*/libffms2.so* /usr/lib/libffms2.so* /usr/local/lib/*/libffms2.so* /usr/local/lib/libffms2.so*; do
+        for _p in /usr/lib/*/libffms2.so* /usr/lib/libffms2.so* /usr/lib64/libffms2.so* /usr/local/lib/*/libffms2.so* /usr/local/lib/libffms2.so*; do
             [ -f "$_p" ] || continue
             case "$_p" in *.la) continue ;; esac
             cp -f "$_p" "$VS_PLUGIN_DIR/libffms2.so"

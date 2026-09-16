@@ -11,6 +11,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 from datetime import datetime
@@ -458,19 +459,23 @@ def _should_delete_temp_file(file_path) -> bool:
     """Return whether a matched file looks like a generated temp artifact."""
     if not file_path.is_file():
         return False
-    temp_markers = ("temp", "intermediate", "ffindex", "lwi")
+    temp_markers = ("_temp_script", "_intermediate", "ffindex", "lwi", "_part")
     return any(marker in file_path.name for marker in temp_markers)
 
 
 def cleanup_temp_files(work_dir, stem):
-    """Robust cleanup of all temporary files."""
+    """Sweep legacy temp artifacts that older versions wrote beside the source.
+
+    Current runs keep everything inside the per-video workspace folder, so
+    this only matches files derived from ``stem`` and never touches user files.
+    """
     patterns = [
         f"{stem}_temp_script.vpy",
         f"{stem}_intermediate.mov",
         f"{stem}_intermediate.mkv",
-        f"{stem}.*ffindex",  # Clean FFMS2 index files
-        f"{stem}.*lwi",  # Clean LSMASH index files
-        "*.vpy",  # Safety: Clean stray VPYs
+        f"{stem}.*ffindex",  # FFMS2 index written beside the source
+        f"{stem}.*lwi",  # LSMASH index written beside the source
+        f"{stem}_deinterlaced*_part.*",  # interrupted output from older versions
     ]
 
     for p_str in patterns:
@@ -481,6 +486,13 @@ def cleanup_temp_files(work_dir, stem):
                 file_path.unlink()
             except OSError:
                 pass
+
+
+def cleanup_legacy_cache_dir():
+    """Remove the system-temp index cache that versions before 1.1.3 left behind."""
+    legacy_dir = os.path.join(tempfile.gettempdir(), "auto-vhs-deinterlancer")
+    if os.path.isdir(legacy_dir):
+        shutil.rmtree(legacy_dir, ignore_errors=True)
 
 
 def update_progress(percent, message, time_str=None, speed_str=None, eta_str=None, process_name="FFmpeg"):
@@ -584,6 +596,32 @@ def get_nvidia_gpu_info():
     except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         pass
     return None, None
+
+
+_ENCODER_LISTING_PATTERN = re.compile(r"^\s*[VAS][.FSXBD]{5}\s+(\S+)")
+
+
+@functools.lru_cache(maxsize=1)
+def get_available_ffmpeg_encoders() -> frozenset:
+    """Return the encoder names the active FFmpeg build exposes.
+
+    Builds differ in which AV1 encoder they ship (the Windows "essentials"
+    FFmpeg has libaom but no SVT-AV1), so the pipeline asks instead of assuming.
+    An empty set means the listing could not be read; callers then keep their
+    preferred default and let FFmpeg report the problem itself.
+    """
+    ffmpeg_exe = shutil.which("ffmpeg") or "ffmpeg"
+    try:
+        output = subprocess.check_output([ffmpeg_exe, "-hide_banner", "-encoders"], timeout=15, stderr=subprocess.STDOUT)
+    except (subprocess.SubprocessError, OSError):
+        return frozenset()
+
+    names = set()
+    for line in output.decode(errors="replace").splitlines():
+        match = _ENCODER_LISTING_PATTERN.match(line)
+        if match:
+            names.add(match.group(1))
+    return frozenset(names)
 
 
 def has_av1_nvenc_capability():
@@ -735,12 +773,14 @@ __all__ = [
     "vapoursynth_has_opencl_qtgmc",
     "parse_ffmpeg_time",
     "cleanup_temp_files",
+    "cleanup_legacy_cache_dir",
     "update_progress",
     "resolve_venv_root",
     "resolve_vspipe_executable",
     "get_cpu_name",
     "get_nvidia_gpu_info",
     "has_av1_nvenc_capability",
+    "get_available_ffmpeg_encoders",
     "get_gpu_name",
     "probe_stream_entry",
     "get_duration",

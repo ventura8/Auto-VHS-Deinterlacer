@@ -5,6 +5,8 @@ import stat
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 def _collect_batch_summary_lines(ad, files, fake_results):
     """Run main with fake batch results and return captured summary lines."""
@@ -72,6 +74,7 @@ def test_process_batch_appends_failed_row_for_exceptions(monkeypatch):
     ]
 
 
+@pytest.mark.usefixtures("stub_source_digest")
 def test_process_video_happy_path_execution(ad):
     """
     Test the Rendering Loop (Happy Path) with proper mocking.

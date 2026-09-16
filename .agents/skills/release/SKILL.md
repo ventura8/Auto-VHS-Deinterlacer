@@ -33,10 +33,13 @@ Use this skill to document, prepare, and verify releases for Auto-VHS-Deinterlac
 
 ## `_github_description.md` Format
 
-Follow the Ubuntu-Hello pattern used in `docs/releases/`:
+Follow the pattern used in `docs/releases/`. The GitHub release title is the
+bare tag (`vX.Y.Z`, set explicitly in `release.yml`), so the body's first
+heading must be the bare tag as well; never a long headline, which would
+render as a second title on the release page:
 
 ```markdown
-# Auto-VHS-Deinterlacer vX.Y.Z — <Short Title>
+# vX.Y.Z
 
 One-paragraph summary of what this release accomplishes.
 

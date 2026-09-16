@@ -40,6 +40,7 @@ def test_process_video_av1_mode(ad):
                                         ad.process_video(input_p)
 
 
+@pytest.mark.usefixtures("stub_source_digest")
 def test_process_video_sync_trim(ad):
     """Test the audio trimming branch."""
     mock_stat = MagicMock()
@@ -70,6 +71,7 @@ def test_process_video_sync_trim(ad):
                                                         assert mock_run.called
 
 
+@pytest.mark.usefixtures("stub_source_digest")
 def test_intermediate_failure(ad):
     """Test Intermediate encoding failed."""
     input_p = Path("fail_test.mp4")
@@ -129,18 +131,19 @@ def test_main_no_files(ad):
                         # If input prompt shown, it passed
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only CPU fallback test")
 def test_get_cpu_name_fallback_win(ad):
-    """Test CPU name fallback (Windows)."""
-    # Use context manager to avoid ModuleNotFoundError on Linux
+    """Registry lookup failure falls through to platform.processor()."""
+    # Fully mocked, so this runs on every platform: the POSIX probe is silenced
+    # so the Windows branch is the only thing under test.
     with patch("winreg.OpenKey", side_effect=OSError):
-        with patch("platform.processor", return_value="FallbackCPU"):
-            assert ad.get_cpu_name() == "FallbackCPU"
+        with patch("modules.core.utils._get_posix_cpu_name", return_value=None):
+            with patch("platform.processor", return_value="FallbackCPU"):
+                assert ad.get_cpu_name() == "FallbackCPU"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Non-Windows CPU fallback test")
 def test_get_cpu_name_fallback_linux(ad):
-    """Test CPU name fallback (Linux)."""
+    """Linux /proc lookup failure falls through to platform.processor()."""
+    # Fully mocked, so this runs on every platform.
     with patch("modules.core.utils.winreg", None):
         with patch("modules.core.utils._get_linux_cpu_name", return_value=None):
             with patch("platform.system", return_value="Linux"):
@@ -205,7 +208,7 @@ def testget_input_files_single_quote(ad):
     """Test single quote cleanup."""
     with patch("builtins.input", return_value="'video.mp4'"):
         with patch("sys.argv", ["script.py"]):
-            with patch("modules.runtime.pipeline.Path") as mock_path_cls:
+            with patch("modules.runtime.inputs.Path") as mock_path_cls:
                 mock_instance = mock_path_cls.return_value
                 mock_instance.configure_mock(
                     **{

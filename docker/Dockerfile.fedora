@@ -1,0 +1,34 @@
+FROM fedora:42
+
+ENV PYTHONUNBUFFERED=1
+
+# Only what install.sh cannot install for itself: Python 3.12 (Fedora 42 ships
+# 3.13 by default), git, curl and a C/C++ toolchain. Everything else, including
+# the VapourSynth plugin stack and the static FFmpeg, is the installer's job and
+# is exactly what this image exercises on a dnf-based distribution.
+RUN dnf install -y --setopt=install_weak_deps=False \
+    python3.12 \
+    python3.12-devel \
+    git \
+    curl \
+    ca-certificates \
+    gcc \
+    gcc-c++ \
+    make \
+    pkgconf-pkg-config \
+    && dnf clean all
+
+WORKDIR /workspace
+
+COPY . /workspace
+
+# Seed the same isolated venv used by install.sh so its vspipe wrapper is also
+# available on PATH for subsequent Docker build and test commands.
+ENV PATH="/workspace/.venv/bin:${PATH}"
+
+RUN chmod +x install.sh run_pipeline_localy.sh \
+    && python3.12 -m venv .venv \
+    && .venv/bin/pip install vapoursynth==79 \
+    && ./install.sh
+
+CMD ["bash", "-c", "./run_pipeline_localy.sh && .venv/bin/pytest -v tests/"]

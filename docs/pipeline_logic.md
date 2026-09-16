@@ -25,22 +25,60 @@ Before processing begins, the script:
      - Drift > 1.5%: Ignored (safety cap).
      - Valid Drift: Calculated as `speed_factor` for real-time correction.
 
-### 2b. Single-Pass Execution
+### 2b. Segmented Execution (Resumable)
 
-The pipeline executes a **single** consolidated command:
-`VSPipe (Y4M) | FFmpeg (Input 0: Pipe, Input 1: Source Audio)`
+The clip is encoded in fixed-length segments (`resume_segment_minutes`,
+default 5). For each segment the pipeline runs one consolidated command:
+`VSPipe --start N --end M (raw video) | FFmpeg (video only)`
 
-- **Video Flow**: Deinterlaced frames are piped directly to FFmpeg.
-- **Audio Flow**: Source audio is read, and `atempo` filters are applied on-the-fly if drift correction is needed.
+- **Video Flow**: Deinterlaced frames are piped directly to FFmpeg and written
+  as `segments/seg_NNNN.part.<ext>`; the file is renamed to `seg_NNNN.<ext>`
+  only after both processes exit cleanly.
+- **Long tapes**: the `vspipe --info` probe's hang guard scales with the source
+  size (30 min + 5 min/GB) because it builds the index on first run. After the
+  first encoded segment the pipeline projects the output size and the peak disk
+  use during the join (segments and the muxed part file coexist, so about twice
+  the output) and warns when the workspace drive is short; the join itself is
+  refused, with the segments kept for resume, if the drive cannot hold it.
+- **Resume**: Segments already present and valid are skipped, so a rerun after
+  a power cut continues from the last finished segment. The workspace stores
+  the source identity (path, size, nanosecond mtime and a digest of sixteen
+  1 MiB samples of the content) and a fingerprint of the settings that shape
+  the video.
+  A replaced source discards the indexes and segments before anything is
+  probed; changed settings discard the segments. A segment that cannot be
+  deleted fails the job instead of being reused under the new fingerprint.
 - **Encoding**:
   - **ProRes**: Encodes to ProRes 422 HQ (10-bit).
   - **AV1**: Transcodes with NVENC AV1 only when the probe succeeds; otherwise it
-    uses CPU-based SVT-AV1.
+    uses the first AV1 CPU encoder the active FFmpeg actually provides
+    (SVT-AV1, then libaom).
+
+### 2c. Final Mux
+
+Once every segment exists, FFmpeg concatenates them with stream copy (no
+re-encode) and muxes the source audio, applying `atempo`/`adelay` when drift
+correction or a manual offset is configured. The result is written inside the
+workspace and then atomically renamed to the final output name.
 
 ## Step 3: Robustness & Cleanup
 
-The pipeline is designed to be "Power Loss Tolerant".
+The pipeline is designed to be "Power Loss Tolerant" and to never leave temp
+files behind.
 
-- **Unique Naming**: Temporary scripts and intermediate files use unique identifiers based on the input filename.
-- **Resume Capability**: Checks if the final output exists to avoid re-processing.
-- **Auto-Cleanup**: Automatically removes temporary scripts and index files (`.ffindex`, `.lwi`) upon success.
+- **One Workspace Per Video**: Every temporary or cache file lives inside
+  `<source name>.autovhs-tmp/` next to the source:
+  `restore.vpy` (generated script), `index/` (ffms2 / L-SMASH / BestSource
+  indexes), `segments/` (finished video segments), `segments.txt` (concat
+  list), `state.json` (settings fingerprint) and the muxed `*_part.<ext>`
+  file. Apart from that one workspace folder, nothing is written beside the
+  source, and nothing at all is written to the system temp folder.
+- **Resume Capability**: Checks if the final output exists to avoid
+  re-processing, and otherwise reuses finished segments from the workspace.
+  Interrupted `*.part.*` files are deleted at every start.
+- **Auto-Cleanup**: The whole workspace folder is deleted as soon as the final
+  output is in place, or when a valid output already exists. On failure the
+  workspace is kept and the log tells you to re-run the same file to resume.
+  Leftovers from versions before 1.1.3 (`*_temp_script.vpy`, `*.ffindex`,
+  `*.lwi`, `*_part.*` beside the source, and the old system-temp index cache)
+  are swept automatically.

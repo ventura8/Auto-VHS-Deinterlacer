@@ -2,6 +2,7 @@
 
 import ast
 import importlib
+import importlib.util
 import os
 import stat
 from pathlib import Path
@@ -273,7 +274,7 @@ def testget_input_files_interactive():
     get_input_files = importlib.import_module("modules.runtime.pipeline").get_input_files
 
     with patch("builtins.input") as mock_input:
-        with patch("modules.runtime.pipeline.Path") as mock_path_class:
+        with patch("modules.runtime.inputs.Path") as mock_path_class:
             mock_input.return_value = '"tape.mp4"'
             mock_p = mock_path_class.return_value
             mock_p.is_file.return_value = True
@@ -320,7 +321,8 @@ def test_create_vpy_script_uses_safe_python_path_literals_and_retains_dll_handle
     content = _render_vpy_content(abspath_side_effect=lambda _value: "C:/captures/it's tape.mp4")
     assert "_DLL_DIRECTORY_HANDLES = []" in content
     assert "_DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(" in content
-    assert 'core.ffms2.Source("C:/captures/it\'s tape.mp4"' in content
+    assert 'return loader("C:/captures/it\'s tape.mp4"' in content
+    assert "_open_source(core.ffms2.Source, 'cachefile'" in content
     ast.parse(content)
 
 
@@ -339,6 +341,7 @@ def test_process_video_resume_final():
                     process_video(input_p)
 
 
+@pytest.mark.usefixtures("stub_source_digest")
 def test_process_video_pipeline():
     """Test Single-Pass Pipeline (Mocked)."""
     process_video = importlib.import_module("modules.runtime.pipeline").process_video
@@ -519,3 +522,98 @@ def test_setup_environment():
             with patch("modules.core.utils.os.environ", {"PATH": ""}):
                 utils.setup_environment()
                 assert "C:/repo/.venv/Scripts" in utils.os.environ["PATH"].replace("\\", "/")
+
+
+def _extract_open_source_block(content: str) -> str:
+    """Return the generated cache-isolation helper block from a VPY script."""
+    start = content.index("_UNSUPPORTED_ARG_TOKENS = (")
+    end = content.index("if hasattr(core, 'ffms2'):")
+    return content[start:end]
+
+
+class _FakeVapourSynthError(Exception):
+    """Stand-in for ``vapoursynth.Error`` in generated-script tests."""
+
+
+def _load_open_source(content: str, tmp_path: Path):
+    """Import the generated helper block as a module with a stand-in vapoursynth."""
+    module_path = tmp_path / "generated_source_block.py"
+    module_path.write_text(_extract_open_source_block(content), encoding="utf-8")
+
+    spec = importlib.util.spec_from_file_location("generated_source_block", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.vs = MagicMock(Error=_FakeVapourSynthError)
+    return getattr(module, "_open_source")
+
+
+def test_generated_vpy_never_retries_source_without_cache_isolation():
+    """The generated loader has no unisolated retry that would leak an index."""
+    content = _render_vpy_content()
+    block = _extract_open_source_block(content)
+
+    # The only loader call is the isolated one carrying the cache keyword.
+    assert block.count("return loader(") == 1
+    assert "**{cache_kwarg: cache_value}" in block
+    ast.parse(content)
+
+
+def test_generated_open_source_passes_cache_argument_through(tmp_path):
+    """A loader that accepts the cache keyword receives it and its value."""
+    open_source = _load_open_source(_render_vpy_content(), tmp_path)
+    seen = {}
+
+    def loader(path, **kwargs):
+        seen["path"] = path
+        seen["kwargs"] = kwargs
+        return "clip"
+
+    assert open_source(loader, "cachefile", "C:/ws/index/source.ffindex") == "clip"
+    assert seen["kwargs"]["cachefile"] == "C:/ws/index/source.ffindex"
+
+
+def test_generated_open_source_reraises_ordinary_source_failures(tmp_path):
+    """A real source or index failure propagates instead of retrying unisolated."""
+    open_source = _load_open_source(_render_vpy_content(), tmp_path)
+
+    def loader(_path, **_kwargs):
+        raise _FakeVapourSynthError("Failed to open file for reading")
+
+    with pytest.raises(_FakeVapourSynthError, match="Failed to open file"):
+        open_source(loader, "cachefile", "C:/ws/index/source.ffindex")
+
+
+def test_generated_open_source_reports_unsupported_cache_argument(tmp_path):
+    """A plugin that rejects the cache keyword raises a clear compatibility error."""
+    open_source = _load_open_source(_render_vpy_content(), tmp_path)
+
+    def loader(_path, **_kwargs):
+        raise _FakeVapourSynthError("Source: Function does not take argument(s) named cachefile")
+
+    with pytest.raises(RuntimeError, match="rejects the 'cachefile' argument"):
+        open_source(loader, "cachefile", "C:/ws/index/source.ffindex")
+
+
+@pytest.mark.parametrize(
+    ("size_bytes", "expected"),
+    [
+        (None, 1800),
+        (0, 1800),
+        (-5, 1800),
+        (10_000_000_000, 1800 + 3000),
+        (50_000_000_000, 1800 + 15_000),
+    ],
+)
+def test_resolve_info_timeout_scales_with_source_size(size_bytes, expected):
+    """The index-build hang guard grows with the file instead of capping long tapes."""
+    vspipe = importlib.import_module("modules.runtime.vspipe")
+    assert vspipe.resolve_info_timeout(size_bytes) == expected
+
+
+def test_get_vpy_info_honours_the_timeout_it_is_given():
+    """The probe passes the caller's timeout through to the subprocess call."""
+    vspipe = importlib.import_module("modules.runtime.vspipe")
+    with patch("modules.runtime.vspipe.get_vspipe_env", return_value={}):
+        with patch("subprocess.check_output", return_value=b"Frames: 10\nFPS: 25/1\n") as mock_check:
+            vspipe.get_vpy_info("vspipe", "script.vpy", 4321)
+    assert mock_check.call_args.kwargs["timeout"] == 4321

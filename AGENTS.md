@@ -12,7 +12,7 @@ models for audio separation, hardware-adaptive threading, and
 audio-video synchronization.
 
 - **Version single source of truth**: Pinned in `pyproject.toml`
-  (`[project].version`, currently `1.1.2`).
+  (`[project].version`, currently `1.1.3`).
 - **Runtime Environment**: Windows-first on Python 3.12 (CPython
   64-bit) with virtualenv located at `.VENV`.
 
@@ -22,7 +22,9 @@ audio-video synchronization.
   - `modules.core`: Shared configuration, hardware detection,
     logging, environment helpers, and `patch_havsfunc`
     (documented setup-time patch exception).
-  - `modules.runtime`: Pipeline execution, process orchestration
+  - `modules.runtime`: Pipeline execution, input discovery
+    (`inputs`), encoder argument selection (`encoders`), the per-video
+    temp workspace and resume state (`workspace`), process orchestration
     (`vspipe`, `ffmpeg`), and fallback native frame streaming
     (`vspipe_native`).
   - `auto_deinterlancer.py`: CLI entrypoint and parameter

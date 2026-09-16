@@ -1,7 +1,6 @@
 """Integration tests that cover branch behavior in pipeline helpers."""
 
 import importlib
-import stat
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -19,20 +18,19 @@ def test_build_ffmpeg_cmd_av1_with_atempo_and_adelay():
         AUDIO_CODEC="aac",
         AUDIO_BITRATE="256k",
     ):
-        cmd = build_ffmpeg_cmd(
-            Path("input.mp4"),
-            Path("out_part.mkv"),
-            atempo=1.01,
-            fps=29.97,
-            width=720,
-            height=576,
-            pixel_format="yuv420p10le",
-        )
+        with patch("modules.runtime.encoders.get_available_ffmpeg_encoders", return_value=frozenset({"libsvtav1"})):
+            cmd = build_ffmpeg_cmd(
+                Path("out_part.mkv"),
+                fps=29.97,
+                width=720,
+                height=576,
+                pixel_format="yuv420p10le",
+            )
 
     cmd_str = " ".join(cmd)
-    assert "libsvtav1" in cmd_str
-    assert "-threads:v 32" in cmd_str
     assert "-c:v libsvtav1" in cmd_str
+    assert "-threads:v 32" in cmd_str
+    assert "-an" in cmd and "atempo" not in cmd_str
 
 
 def test_build_ffmpeg_cmd_av1_uses_nvenc_when_capable():
@@ -49,9 +47,7 @@ def test_build_ffmpeg_cmd_av1_uses_nvenc_when_capable():
         AUDIO_BITRATE="256k",
     ):
         cmd = build_ffmpeg_cmd(
-            Path("input.mp4"),
             Path("out_part.mkv"),
-            atempo=1.0,
             fps=29.97,
             width=720,
             height=576,
@@ -77,11 +73,9 @@ def test_build_ffmpeg_cmd_logs_gpu_path_for_av1_nvenc():
         AUDIO_CODEC="aac",
         AUDIO_BITRATE="256k",
     ):
-        with patch("modules.runtime.pipeline.log_info") as mock_log:
+        with patch("modules.runtime.encoders.log_info") as mock_log:
             build_ffmpeg_cmd(
-                Path("input.mp4"),
                 Path("out_part.mkv"),
-                atempo=1.0,
                 fps=29.97,
                 width=720,
                 height=576,
@@ -105,11 +99,9 @@ def test_build_ffmpeg_cmd_logs_cpu_fallback_for_av1():
         AUDIO_CODEC="aac",
         AUDIO_BITRATE="256k",
     ):
-        with patch("modules.runtime.pipeline.log_info") as mock_log:
+        with patch("modules.runtime.encoders.log_info") as mock_log:
             build_ffmpeg_cmd(
-                Path("input.mp4"),
                 Path("out_part.mkv"),
-                atempo=1.0,
                 fps=29.97,
                 width=720,
                 height=576,
@@ -120,10 +112,10 @@ def test_build_ffmpeg_cmd_logs_cpu_fallback_for_av1():
     assert "AV1 path: CPU fallback enabled" in logged
 
 
-def test_build_ffmpeg_cmd_av1_includes_audio_sync_filters():
-    """Build AV1 command with atempo and adelay audio filters."""
+def test_build_mux_cmd_includes_audio_sync_filters():
+    """The final mux copies video and applies atempo and adelay audio filters."""
     pipeline = importlib.import_module("modules.runtime.pipeline")
-    build_ffmpeg_cmd = getattr(pipeline, "_build_ffmpeg_cmd")
+    build_mux_cmd = getattr(pipeline, "_build_mux_cmd")
 
     with patch.multiple(
         "modules.runtime.pipeline",
@@ -133,19 +125,12 @@ def test_build_ffmpeg_cmd_av1_includes_audio_sync_filters():
         AUDIO_CODEC="aac",
         AUDIO_BITRATE="256k",
     ):
-        cmd = build_ffmpeg_cmd(
-            Path("input.mp4"),
-            Path("out_part.mkv"),
-            atempo=1.01,
-            fps=29.97,
-            width=720,
-            height=576,
-            pixel_format="yuv420p10le",
-        )
+        cmd = build_mux_cmd(Path("input.mp4"), Path("segments.txt"), Path("out_part.mkv"), atempo=1.01)
 
     cmd_str = " ".join(cmd)
-    assert "atempo=1.010000" in cmd_str
-    assert "adelay=1250|1250" in cmd_str
+    assert "-f concat -safe 0 -i segments.txt -i input.mp4 -map 0:v:0 -map 1:a:0? -c:v copy" in cmd_str
+    assert "-af atempo=1.010000,adelay=1250|1250" in cmd_str
+    assert "-c:a aac -b:a 256k out_part.mkv" in cmd_str
 
 
 def test_build_ffmpeg_cmd_prores_uses_hw_thread_count():
@@ -156,9 +141,7 @@ def test_build_ffmpeg_cmd_prores_uses_hw_thread_count():
     with patch("modules.runtime.pipeline.ENCODER", "prores"):
         with patch("modules.runtime.pipeline.HW_SETTINGS", {"cpu_threads": 24}):
             cmd = build_ffmpeg_cmd(
-                Path("input.mp4"),
                 Path("out_part.mov"),
-                atempo=1.0,
                 fps=29.97,
                 width=720,
                 height=576,
@@ -254,28 +237,29 @@ def test_run_encoding_pipeline_fails_when_vspipe_fails():
     mock_failure.assert_called_once_with(1, [])
 
 
-def test_process_video_debug_venv_fallback_and_rename_failure():
-    """Cover debug venv fallback and output rename failure error logging."""
+def test_process_video_debug_venv_fallback_and_rename_failure(tmp_path):
+    """Cover debug log level and output rename failure error logging."""
     pipeline = importlib.import_module("modules.runtime.pipeline")
 
-    input_path = Path("input.mp4")
-    mock_stat = MagicMock()
-    mock_stat.st_size = 5000
-    mock_stat.st_mode = stat.S_IFREG
+    input_path = tmp_path / "input.mp4"
+    input_path.write_bytes(b"x")
+    job = {"duration_sec": 4.0}
 
-    with patch("modules.runtime.pipeline.DEBUG_MODE", True):
-        with patch.object(Path, "exists", side_effect=[True, False, True]):
-            with patch.object(Path, "stat", return_value=mock_stat):
-                with patch("modules.runtime.pipeline.create_vpy_script"):
-                    with patch("modules.runtime.pipeline.shutil.which", return_value="vspipe"):
-                        with patch("modules.runtime.pipeline.os.path.exists", return_value=False):
-                            with patch("modules.runtime.pipeline.get_vpy_info", return_value=(120, 30.0, 0, 0, "unknown")):
-                                with patch("modules.runtime.pipeline._run_encoding_pipeline", return_value=True):
-                                    with patch("pathlib.Path.replace", side_effect=OSError("rename failed")):
-                                        with patch("modules.runtime.pipeline.log_error") as mock_log_error:
-                                            with patch("modules.runtime.pipeline.cleanup_temp_files"):
-                                                pipeline.process_video(input_path)
-                                                assert mock_log_error.called
+    # Patch the logger's setLevel instead of reading the level back: process_video
+    # mutates the shared "AutoVHS" logger, which would otherwise leak DEBUG into
+    # every test that runs after this one.
+    with patch.object(pipeline.logging.getLogger("AutoVHS"), "setLevel") as mock_set_level:
+        with patch("modules.runtime.pipeline.DEBUG_MODE", True):
+            with patch("modules.runtime.pipeline._build_processing_commands", return_value=job):
+                with patch("modules.runtime.pipeline._run_resumable_encode", return_value=True):
+                    with patch("pathlib.Path.replace", side_effect=OSError("rename failed")):
+                        with patch("modules.runtime.pipeline.log_error") as mock_log_error:
+                            with patch("modules.runtime.pipeline.log_info"):
+                                result = pipeline.process_video(input_path)
+
+    assert result["status"] == "failed"
+    assert mock_log_error.called
+    mock_set_level.assert_called_once_with(pipeline.logging.DEBUG)
 
 
 def test_resolve_vspipe_executable_uses_project_venv_when_path_lookup_fails():
@@ -309,8 +293,8 @@ def test_process_video_finalizes_only_after_successful_rename():
 
     with patch.object(Path, "exists", side_effect=[True, True]):
         with patch("modules.runtime.pipeline._get_existing_output_result", return_value=None):
-            with patch("modules.runtime.pipeline._build_processing_commands", return_value=(60.0, ["ffmpeg"], ["vspipe"])):
-                with patch("modules.runtime.pipeline._run_encoding_pipeline", return_value=True):
+            with patch("modules.runtime.pipeline._build_processing_commands", return_value={"duration_sec": 60.0}):
+                with patch("modules.runtime.pipeline._run_resumable_encode", return_value=True):
                     with patch("modules.runtime.pipeline._rename_completed_output", side_effect=record_rename):
                         with patch("modules.runtime.pipeline._finalize_encoding_success", side_effect=record_finalize) as mock_finalize:
                             with patch("modules.runtime.pipeline.cleanup_temp_files"):
@@ -330,8 +314,8 @@ def test_process_video_skips_finalization_when_rename_fails():
 
     with patch.object(Path, "exists", return_value=True):
         with patch("modules.runtime.pipeline._get_existing_output_result", return_value=None):
-            with patch("modules.runtime.pipeline._build_processing_commands", return_value=(60.0, ["ffmpeg"], ["vspipe"])):
-                with patch("modules.runtime.pipeline._run_encoding_pipeline", return_value=True):
+            with patch("modules.runtime.pipeline._build_processing_commands", return_value={"duration_sec": 60.0}):
+                with patch("modules.runtime.pipeline._run_resumable_encode", return_value=True):
                     with patch("modules.runtime.pipeline._rename_completed_output", return_value=False):
                         with patch("modules.runtime.pipeline._finalize_encoding_success") as mock_finalize:
                             with patch("modules.runtime.pipeline.cleanup_temp_files"):
@@ -340,3 +324,40 @@ def test_process_video_skips_finalization_when_rename_fails():
 
     assert result["status"] == "failed"
     mock_finalize.assert_not_called()
+
+
+def test_av1_cpu_encoder_prefers_svt_then_libaom():
+    """The CPU fallback picks whichever AV1 encoder the active FFmpeg actually has."""
+    encoders = importlib.import_module("modules.runtime.encoders")
+    get_av1_cpu_encoder_args = encoders.get_av1_cpu_encoder_args
+
+    both = frozenset({"libsvtav1", "libaom-av1"})
+    with patch("modules.runtime.encoders.get_available_ffmpeg_encoders", return_value=both):
+        assert get_av1_cpu_encoder_args()[1] == "libsvtav1"
+
+    with patch("modules.runtime.encoders.get_available_ffmpeg_encoders", return_value=frozenset({"libaom-av1"})):
+        libaom = get_av1_cpu_encoder_args()
+    assert libaom[1] == "libaom-av1"
+    # libaom needs an explicit target bitrate of 0 for constant-quality mode.
+    assert "-b:v" in libaom and libaom[libaom.index("-b:v") + 1] == "0"
+
+
+def test_av1_cpu_encoder_falls_back_to_svt_when_listing_is_unavailable():
+    """An unreadable encoder listing keeps the preferred encoder so FFmpeg reports it."""
+    encoders = importlib.import_module("modules.runtime.encoders")
+    get_av1_cpu_encoder_args = encoders.get_av1_cpu_encoder_args
+
+    with patch("modules.runtime.encoders.get_available_ffmpeg_encoders", return_value=frozenset()):
+        assert get_av1_cpu_encoder_args()[1] == "libsvtav1"
+
+
+def test_av1_cpu_fallback_log_names_the_selected_encoder():
+    """The log line reports the encoder that will actually run."""
+    encoders = importlib.import_module("modules.runtime.encoders")
+
+    with patch("modules.runtime.encoders.get_available_ffmpeg_encoders", return_value=frozenset({"libaom-av1"})):
+        with patch("modules.runtime.encoders.log_info") as mock_log:
+            encoders.log_encoder_execution_path("av1", {"has_av1_nvenc": False})
+
+    logged = "\n".join(call.args[0] for call in mock_log.call_args_list if call.args)
+    assert "CPU fallback enabled (libaom-av1)" in logged

@@ -470,3 +470,40 @@ def test_get_windows_ram_gb_structure_and_success():
     with patch.object(config_module, "ctypes", fake_ctypes):
         val = getattr(config_module, "_get_windows_ram_gb")()
         assert val == 64.0
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "resume_segment_minutes: five",
+        "resume_segment_minutes: -1",
+        "resume_segment_minutes: true",
+        "resume_segment_minutes: .nan",
+        "resume_segment_minutes: .inf",
+        "resume_segment_minutes: -.inf",
+    ],
+)
+def test_invalid_resume_segment_minutes_exits_on_reload(tmp_path, raw):
+    """Reload config module should exit unless resume_segment_minutes is a finite number >= 0."""
+    (tmp_path / "config.yaml").write_text(raw + "\n", encoding="utf-8")
+    with patch("modules.core.utils.get_project_root", return_value=str(tmp_path)):
+        with patch("sys.exit", side_effect=SystemExit(1)):
+            with pytest.raises(SystemExit):
+                importlib.reload(config_module)
+
+    importlib.reload(config_module)
+
+
+def test_resume_segment_minutes_accepts_zero_and_defaults(tmp_path):
+    """Zero disables segmentation and a missing key falls back to five minutes."""
+    (tmp_path / "config.yaml").write_text("resume_segment_minutes: 0\n", encoding="utf-8")
+    with patch("modules.core.utils.get_project_root", return_value=str(tmp_path)):
+        importlib.reload(config_module)
+        assert config_module.RESUME_SEGMENT_MINUTES == 0.0
+
+    (tmp_path / "config.yaml").write_text("encoder: prores\n", encoding="utf-8")
+    with patch("modules.core.utils.get_project_root", return_value=str(tmp_path)):
+        importlib.reload(config_module)
+        assert config_module.RESUME_SEGMENT_MINUTES == 5.0
+
+    importlib.reload(config_module)

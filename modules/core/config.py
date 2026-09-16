@@ -1,6 +1,7 @@
 """Runtime configuration loading and hardware profile detection."""
 
 import ctypes
+import math
 import os
 import sys
 from typing import NoReturn
@@ -66,6 +67,23 @@ if not isinstance(_tv_standard_raw, str):
     sys.exit(1)
 TV_STANDARD = _tv_standard_raw.lower()
 DEBUG_MODE = CONFIG.get("debug_logging", False)
+
+
+def _resolve_resume_segment_minutes(raw_value) -> float:
+    """Validate the resume segment length; 0 disables segmentation.
+
+    YAML accepts ``.nan`` and ``.inf`` as floats, and neither survives the
+    frame-count conversion in the pipeline, so reject non-finite values here
+    instead of failing mid-job.
+    """
+    is_number = isinstance(raw_value, (int, float)) and not isinstance(raw_value, bool)
+    if not is_number or not math.isfinite(raw_value) or raw_value < 0:
+        log_error("ERROR: Invalid resume_segment_minutes in config. Must be a finite number >= 0.")
+        sys.exit(1)
+    return float(raw_value)
+
+
+RESUME_SEGMENT_MINUTES = _resolve_resume_segment_minutes(CONFIG.get("resume_segment_minutes", 5))
 
 
 def _get_ram_cache_mb(total_ram_gb):
@@ -426,6 +444,7 @@ __all__ = [
     "FIELD_ORDER",
     "TV_STANDARD",
     "DEBUG_MODE",
+    "RESUME_SEGMENT_MINUTES",
     "HW_SETTINGS",
     "VALID_ENCODERS",
     "os",
