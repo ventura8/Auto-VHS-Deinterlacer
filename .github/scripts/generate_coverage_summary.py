@@ -80,7 +80,20 @@ def generate_summary(xml_path):
     print(_build_markdown(line_rate, branch_rate, timestamp, rows))
 
 
+def _force_utf8_stdout():
+    """Emit UTF-8 regardless of the console code page.
+
+    The report contains non-ASCII characters. On Windows a redirected stdout
+    defaults to the ANSI code page (cp1252), which cannot encode them, so the
+    script died with UnicodeEncodeError when the local pipeline captured it.
+    """
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8")
+
+
 if __name__ == "__main__":
+    _force_utf8_stdout()
     if len(sys.argv) > 1:
         generate_summary(sys.argv[1])
     else:

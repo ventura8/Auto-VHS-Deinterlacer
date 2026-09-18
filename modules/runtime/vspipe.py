@@ -22,6 +22,22 @@ from modules.core.utils import (
 # ==============================================================================
 
 VSPIPE_ERROR_TOKENS = ["Script execution failed", "Error", "Failed"]
+# The info probe builds the source index on its first run, and indexing time
+# grows with the file, so the hang guard scales with the source size instead of
+# being a fixed cap that a long tape on a slow drive could exceed. Hitting it
+# would abort the index build (which cannot resume) and silently drop back to a
+# single unchunked segment, the worst outcome for exactly the files it hits.
+VSPIPE_INFO_TIMEOUT_SEC = 1800
+VSPIPE_INFO_TIMEOUT_PER_GB_SEC = 300
+
+
+def resolve_info_timeout(source_size_bytes: int | None) -> int:
+    """Return the probe timeout in seconds for a source of the given size."""
+    if not source_size_bytes or source_size_bytes < 0:
+        return VSPIPE_INFO_TIMEOUT_SEC
+    return VSPIPE_INFO_TIMEOUT_SEC + int(source_size_bytes / 1e9 * VSPIPE_INFO_TIMEOUT_PER_GB_SEC)
+
+
 ESSENTIAL_PLUGINS = [
     "ffms2.dll",
     "libmvtools.dll",
@@ -90,7 +106,7 @@ def _append_vpy_path(lines, path_value):
 
 def _get_vpy_header(venv_root, portable_root, site_paths, current_root):
     """Generates the VPY script header with imports and paths."""
-    lines = ["import sys", "import os", "import hashlib", "import tempfile", f"sys.path.insert(0, {_to_python_path_literal(current_root)})"]
+    lines = ["import sys", "import os", f"sys.path.insert(0, {_to_python_path_literal(current_root)})"]
     for p in site_paths:
         lines.append(f"sys.path.append({_to_python_path_literal(p)})")
 
@@ -491,8 +507,56 @@ def _update_info_field(line, metadata):
         break
 
 
-def create_vpy_script(input_file, output_script, _mode, override_settings=None):
-    """Generates a VapourSynth script based on the selected mode."""
+def _resolve_cache_dir(output_script, cache_dir) -> str:
+    """Return the index cache folder, defaulting to the script's own folder."""
+    resolved = cache_dir or os.path.dirname(os.path.abspath(str(output_script)))
+    return str(resolved).replace("\\", "/")
+
+
+def _append_source_lines(lines, source_literal, fps_num, fps_den, cache_dir):
+    """Append source loading with every index file redirected into ``cache_dir``.
+
+    Each source filter is called with its cache keyword and there is no retry
+    without it: falling back to an unisolated call would write the index beside
+    the source, which is exactly what the per-video workspace exists to prevent.
+    A genuine source or index failure propagates unchanged, and only a plugin
+    that rejects the cache argument itself is reported as a compatibility error.
+    """
+    lines.append(f"_cache_dir = {_to_python_path_literal(cache_dir)}")
+    lines.append("os.makedirs(_cache_dir, exist_ok=True)")
+    lines.append("_UNSUPPORTED_ARG_TOKENS = (")
+    lines.append("    'does not take argument',")
+    lines.append("    'no argument named',")
+    lines.append("    'Unknown argument',")
+    lines.append("    'unexpected keyword argument',")
+    lines.append(")")
+    lines.append("def _open_source(loader, cache_kwarg, cache_value):")
+    lines.append("    try:")
+    lines.append(f"        return loader({source_literal}, fpsnum={fps_num}, fpsden={fps_den}, **{{cache_kwarg: cache_value}})")
+    lines.append("    except (vs.Error, TypeError) as src_err:")
+    lines.append("        err_text = str(src_err)")
+    lines.append("        rejected_arg = cache_kwarg in err_text and any(t in err_text for t in _UNSUPPORTED_ARG_TOKENS)")
+    lines.append("        if not rejected_arg:")
+    lines.append("            raise")
+    lines.append("        raise RuntimeError(")
+    lines.append("            'This VapourSynth source plugin build rejects the '")
+    lines.append("            + repr(cache_kwarg)")
+    lines.append("            + ' argument, so index files cannot be kept inside the job workspace. '")
+    lines.append("            + 'Update ffms2 / L-SMASH Works / BestSource to a build that supports it.'")
+    lines.append("        ) from src_err")
+    lines.append("if hasattr(core, 'ffms2'):")
+    lines.append("    clip = _open_source(core.ffms2.Source, 'cachefile', os.path.join(_cache_dir, 'source.ffindex'))")
+    lines.append("elif hasattr(core, 'lsmas'):")
+    lines.append("    clip = _open_source(core.lsmas.LWLibavSource, 'cachefile', os.path.join(_cache_dir, 'source.lwi'))")
+    lines.append("elif hasattr(core, 'bs'):")
+    lines.append("    clip = _open_source(core.bs.VideoSource, 'cachepath', _cache_dir)")
+    lines.append("else:")
+    lines.append("    raise RuntimeError('No source filter available in VapourSynth (checked ffms2, lsmas, bs).')")
+    lines.append("clip = core.resize.Point(clip, format=vs.YUV420P16)\n")
+
+
+def create_vpy_script(input_file, output_script, _mode, override_settings=None, cache_dir=None):
+    """Generate a VapourSynth script; ``cache_dir`` receives every source index file."""
     current_settings = override_settings if override_settings else HW_SETTINGS
     safe_input = os.path.abspath(input_file).replace("\\", "/").strip()
     current_root = os.getcwd().replace("\\", "/").strip()
@@ -511,23 +575,7 @@ def create_vpy_script(input_file, output_script, _mode, override_settings=None):
 
     fps_logic = _resolve_fps_logic(safe_input)
     fps_num, fps_den = (25, 1) if fps_logic == "pal" else (30000, 1001)
-    source_literal = _to_python_path_literal(safe_input)
-
-    lines.append("ffms_cache_dir = os.path.join(tempfile.gettempdir(), 'auto-vhs-deinterlancer', 'ffms2')")
-    lines.append("os.makedirs(ffms_cache_dir, exist_ok=True)")
-    lines.append(f"_src_size = os.path.getsize({source_literal}) if os.path.exists({source_literal}) else 0")
-    lines.append(f"_src_mtime = os.path.getmtime({source_literal}) if os.path.exists({source_literal}) else 0")
-    lines.append(f'_cache_key = f"{{{source_literal}}}:{{_src_size}}:{{_src_mtime}}".encode("utf-8")')
-    lines.append("ffms_cache_file = os.path.join(ffms_cache_dir, hashlib.sha256(_cache_key).hexdigest() + '.ffindex')")
-    lines.append("if hasattr(core, 'ffms2'):")
-    lines.append(f"    clip = core.ffms2.Source({source_literal}, cachefile=ffms_cache_file, " f"fpsnum={fps_num}, fpsden={fps_den})")
-    lines.append("elif hasattr(core, 'lsmas'):")
-    lines.append(f"    clip = core.lsmas.LWLibavSource({_to_python_path_literal(safe_input)}, fpsnum={fps_num}, fpsden={fps_den})")
-    lines.append("elif hasattr(core, 'bs'):")
-    lines.append(f"    clip = core.bs.VideoSource({_to_python_path_literal(safe_input)}, fpsnum={fps_num}, fpsden={fps_den})")
-    lines.append("else:")
-    lines.append("    raise RuntimeError('No source filter available in VapourSynth (checked ffms2, lsmas, bs).')")
-    lines.append("clip = core.resize.Point(clip, format=vs.YUV420P16)\n")
+    _append_source_lines(lines, _to_python_path_literal(safe_input), fps_num, fps_den, _resolve_cache_dir(output_script, cache_dir))
 
     qtgmc_args = _build_qtgmc_args(current_settings)
     _append_qtgmc_fallback_body(lines, qtgmc_args)
@@ -557,7 +605,7 @@ def _parse_vspipe_info_output(output):
     return metadata["frames"], metadata["fps"], metadata["width"], metadata["height"], metadata["fmt"]
 
 
-def get_vpy_info(vspipe_exe, script_path):
+def get_vpy_info(vspipe_exe, script_path, timeout_sec: int = VSPIPE_INFO_TIMEOUT_SEC):
     """
     Runs vspipe --info to get frame count, FPS, and format.
     Returns: (frames, fps, width, height, fmt) or (None, None, None, None, None) on error.
@@ -567,9 +615,10 @@ def get_vpy_info(vspipe_exe, script_path):
         if is_python_vspipe_launcher(vspipe_exe):
             env.pop("PYTHONHOME", None)
             env.pop("PYTHONPATH", None)
-        # Use info mode
+        # Info mode also builds the source index on the first run; callers pass a
+        # timeout scaled to the source size via resolve_info_timeout().
         cmd = [vspipe_exe, "--info", script_path]
-        output = subprocess.check_output(cmd, env=env, stderr=subprocess.STDOUT, timeout=30).decode()
+        output = subprocess.check_output(cmd, env=env, stderr=subprocess.STDOUT, timeout=timeout_sec).decode()
         return _parse_vspipe_info_output(output)
 
     except subprocess.CalledProcessError as e:
@@ -585,4 +634,5 @@ __all__ = [
     "log_vspipe_output",
     "create_vpy_script",
     "get_vpy_info",
+    "resolve_info_timeout",
 ]

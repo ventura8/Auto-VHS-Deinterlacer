@@ -267,9 +267,10 @@ jobs:
 
       - name: Run Installer (Non-Interactive)
         shell: pwsh
-        env:
-          # Keep the full runner FFmpeg available for libsvtav1 AV1 E2E tests.
-          AVD_SKIP_FFMPEG: "1"
+        # No AVD_SKIP_FFMPEG here: unlike the macOS job, the Windows runner image
+        # ships no FFmpeg, so skipping the bundled build left every real-dependency
+        # scenario skipped. install.ps1 bundles the gyan.dev build; its AV1 path
+        # is exercised through the runtime encoder probe (libsvtav1 or libaom-av1).
         run: |
           & .\install.ps1 -NoPause
 
@@ -279,4 +280,4 @@ jobs:
           AUTO_VHS_SKIP_HW_DETECT: "1"
         run: |
           .\.VENV\Scripts\python.exe -m pip install pytest pytest-cov defusedxml
-          .\.VENV\Scripts\python.exe -m pytest -v --no-cov tests/
+          .\.VENV\Scripts\python.exe -m pytest -v -rs --no-cov tests/

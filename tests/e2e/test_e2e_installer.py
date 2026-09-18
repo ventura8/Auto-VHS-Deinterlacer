@@ -32,7 +32,15 @@ def _assert_executable(path: Path):
     assert os.access(path, os.X_OK)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="install.sh requires a POSIX shell")
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason=(
+        "install.sh is the POSIX installer and is never the Windows install path "
+        "(install.ps1 is, and it has its own tests). It executes the script directly, "
+        "builds a venv and installs dependencies, so it only runs on the Linux and "
+        "macOS CI jobs."
+    ),
+)
 @pytest.mark.e2e
 @pytest.mark.real_deps
 def test_install_sh_execution_and_artifacts(tmp_path):

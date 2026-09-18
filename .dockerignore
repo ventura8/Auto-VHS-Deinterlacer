@@ -1,8 +1,12 @@
 .git
 .venv
 .VENV
-__pycache__/
-*.py[cod]
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+**/.pytest_cache
+htmlcov
+*.autovhs-tmp
 assets/
 input/
 output/

@@ -532,3 +532,94 @@ def test_vspipe_native_import_fallback_without_msvcrt_or_numpy(monkeypatch):
         assert module.np is None
     finally:
         sys.modules.pop("modules.runtime.vspipe_native", None)
+
+
+def test_vspipe_native_parse_cli_args_frame_range():
+    """``--start``/``--end`` are parsed and removed like vspipe's own options."""
+    fake_vs = SimpleNamespace(get_outputs=lambda: {}, VideoOutputTuple=tuple, VideoNode=object)
+    native = _load_vspipe_native(fake_vs)
+
+    assert getattr(native, "_parse_cli_args")(["--start", "10", "clip.vpy", "--end", "19", "--raw"]) == ("clip.vpy", True, 10, 19)
+    assert getattr(native, "_parse_cli_args")(["clip.vpy"]) == ("clip.vpy", False, None, None)
+
+    with patch.object(native.sys, "exit", side_effect=SystemExit(1)):
+        with pytest.raises(SystemExit):
+            getattr(native, "_parse_cli_args")(["--start", "ten", "clip.vpy"])
+        with pytest.raises(SystemExit):
+            getattr(native, "_parse_cli_args")(["clip.vpy", "--end"])
+
+
+def test_vspipe_native_slice_clip_matches_vspipe_inclusive_range():
+    """Slicing mirrors vspipe: ``--end`` is inclusive and either bound is optional."""
+    fake_vs = SimpleNamespace(get_outputs=lambda: {}, VideoOutputTuple=tuple, VideoNode=object)
+    native = _load_vspipe_native(fake_vs)
+    frames = list(range(10))
+
+    assert getattr(native, "_slice_clip")(frames, None, None) is frames
+    assert getattr(native, "_slice_clip")(frames, 2, 4) == [2, 3, 4]
+    assert getattr(native, "_slice_clip")(frames, 7, None) == [7, 8, 9]
+    assert getattr(native, "_slice_clip")(frames, None, 1) == [0, 1]
+
+
+def test_vspipe_native_main_applies_frame_range():
+    """The main entrypoint trims the output clip before streaming it."""
+
+    class FakeVideoNode(list):
+        """List-backed clip whose slices stay clips."""
+
+        width = 720
+        height = 576
+        fps = SimpleNamespace(numerator=25, denominator=1)
+        format = SimpleNamespace(id=0, name="YUV420P16", num_planes=1)
+
+        def __getitem__(self, item):
+            return FakeVideoNode(super().__getitem__(item))
+
+        @property
+        def num_frames(self):
+            """Report the frame count the writer logs against."""
+            return len(self)
+
+    clip = FakeVideoNode(range(5))
+    fake_vs = SimpleNamespace(get_outputs=lambda: {0: clip}, VideoOutputTuple=tuple, VideoNode=FakeVideoNode)
+    native = _load_vspipe_native(fake_vs)
+
+    with patch.object(native.sys, "argv", ["vspipe_native", "ok.vpy", "--raw", "--start", "1", "--end", "3"]):
+        with patch.object(native.os.path, "exists", return_value=True):
+            with patch.object(native.runpy, "run_path"):
+                with patch.object(native, "_write_raw_output") as mock_raw:
+                    with patch.object(native.sys, "stderr"):
+                        native.main()
+
+    assert list(mock_raw.call_args.args[0]) == [1, 2, 3]
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "message"),
+    [
+        (-1, None, "must not be negative"),
+        (0, -5, "must not be negative"),
+        (10, 4, "must not be smaller than --start"),
+    ],
+)
+def test_vspipe_native_slice_clip_rejects_invalid_ranges(start, end, message):
+    """Negative or inverted frame ranges exit with an error instead of slicing silently."""
+    fake_vs = SimpleNamespace(get_outputs=lambda: {}, VideoOutputTuple=tuple, VideoNode=object)
+    native = _load_vspipe_native(fake_vs)
+    slice_clip = getattr(native, "_slice_clip")
+
+    with patch.object(native.sys, "exit", side_effect=SystemExit(1)):
+        with patch.object(native.sys, "stderr") as mock_stderr:
+            with pytest.raises(SystemExit):
+                slice_clip(list(range(10)), start, end)
+
+    written = "".join(call.args[0] for call in mock_stderr.write.call_args_list)
+    assert message in written
+
+
+def test_vspipe_native_slice_clip_accepts_single_frame_range():
+    """A range where start equals end is valid and yields exactly one frame."""
+    fake_vs = SimpleNamespace(get_outputs=lambda: {}, VideoOutputTuple=tuple, VideoNode=object)
+    native = _load_vspipe_native(fake_vs)
+
+    assert getattr(native, "_slice_clip")(list(range(10)), 3, 3) == [3]

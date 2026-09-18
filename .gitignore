@@ -23,6 +23,7 @@ env.bak/
 venv.bak/
 
 # Project Specific
+*.autovhs-tmp/
 *_intermediate.mov
 *_temp_script.vpy
 temp_render_script.vpy

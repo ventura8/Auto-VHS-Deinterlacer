@@ -34,9 +34,26 @@ def _assert_win_credentials(win_service: dict):
 
 
 def _assert_docker_ignore():
-    """Docker build context must exclude local repository artifacts."""
+    """Docker build context must exclude local repository artifacts.
+
+    The cache patterns are anchored with ``**/`` because a bare ``__pycache__/``
+    only matches the repository root in Docker's ignore syntax, so host bytecode
+    from ``modules/`` and ``tests/`` would otherwise be copied into the image.
+    """
     ignored = set((REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines())
-    assert {".git", ".venv", ".VENV", "__pycache__/", "assets/", "input/", "output/"} <= ignored
+    expected = {
+        ".git",
+        ".venv",
+        ".VENV",
+        "**/__pycache__",
+        "**/*.py[cod]",
+        "**/.pytest_cache",
+        "*.autovhs-tmp",
+        "assets/",
+        "input/",
+        "output/",
+    }
+    assert expected <= ignored
 
 
 def _assert_windows_status_flow(content: str):
@@ -103,6 +120,49 @@ def test_ubuntu_dockerfile_version():
     assert ".venv/bin/pip install vapoursynth==79" in content
     assert 'ENV PATH="/workspace/.venv/bin:${PATH}"' in content
     _assert_docker_ignore()
+
+
+FEDORA_DOCKERFILE_EXPECTED = (
+    "FROM fedora:",
+    "python3.12 -m venv .venv",
+    ".venv/bin/pip install vapoursynth==79",
+    "&& ./install.sh",
+    'ENV PATH="/workspace/.venv/bin:${PATH}"',
+    'CMD ["bash", "-c", "./run_pipeline_localy.sh && .venv/bin/pytest -v tests/"]',
+)
+
+
+@pytest.mark.docker
+def test_fedora_dockerfile_mirrors_the_ubuntu_harness():
+    """The dnf-based image exercises install.sh the same way the Ubuntu image does."""
+    dockerfile = REPO_ROOT / "docker" / "Dockerfile.fedora"
+    assert dockerfile.exists(), "docker/Dockerfile.fedora must exist"
+    content = dockerfile.read_text(encoding="utf-8")
+    missing = [snippet for snippet in FEDORA_DOCKERFILE_EXPECTED if snippet not in content]
+    assert missing == []
+
+
+@pytest.mark.docker
+def test_docker_e2e_runner_dispatches_by_distro():
+    """docker/run_docker_e2e.sh builds docker/Dockerfile.<distro> and rejects unknown names."""
+    content = (REPO_ROOT / "docker" / "run_docker_e2e.sh").read_text(encoding="utf-8")
+    assert 'DISTRO="${1:-ubuntu}"' in content
+    assert "ubuntu|fedora) ;;" in content
+    assert 'docker build -f "docker/Dockerfile.${DISTRO}"' in content
+
+
+def _repo_shell_scripts() -> list:
+    """Every tracked-style shell script in the checkout, ignoring virtual environments."""
+    return [path for path in sorted(REPO_ROOT.glob("**/*.sh")) if not {".venv", ".VENV"} & set(path.parts)]
+
+
+@pytest.mark.docker
+def test_shell_scripts_are_pinned_to_lf():
+    """Shell scripts must stay LF: a CRLF checkout breaks their shebang inside the containers."""
+    attributes = (REPO_ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()
+    assert "*.sh text eol=lf" in attributes
+    offenders = [path.relative_to(REPO_ROOT) for path in _repo_shell_scripts() if b"\r\n" in path.read_bytes()]
+    assert offenders == []
 
 
 @pytest.mark.docker

@@ -6,6 +6,8 @@ import stat
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from modules.runtime import pipeline
 
 
@@ -39,7 +41,7 @@ def testget_input_files_full(ad):
     with patch("sys.argv", ["script.py"]):
         with patch("builtins.input", return_value='"video.mp4"'):
             # Patch Path in modules.runtime.pipeline, not locally
-            with patch("modules.runtime.pipeline.Path") as mock_path_cls:
+            with patch("modules.runtime.inputs.Path") as mock_path_cls:
                 mock_instance = mock_path_cls.return_value
                 mock_instance.is_file.return_value = True
                 mock_instance.exists.return_value = True
@@ -121,6 +123,7 @@ def test_cleanup_on_exit_logic(ad):
             ad.cleanup_on_exit()
 
 
+@pytest.mark.usefixtures("stub_source_digest")
 def test_process_video_branches(ad):
     """Cover multiple process_video branches like resume and errors."""
     mock_stat = MagicMock()

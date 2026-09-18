@@ -34,6 +34,20 @@ deinterlace_mode: "QTGMC"
 #               the installed GPU and driver can encode AV1; otherwise SVT-AV1 uses the CPU.
 encoder: "prores"
 
+# resume_segment_minutes: Power-loss protection. The video is encoded in
+#   segments of this length inside a per-video temp folder
+#   ("<name>.autovhs-tmp" next to the source). If the run is interrupted,
+#   re-running the same file resumes from the last finished segment. The
+#   folder is deleted automatically once the final output is in place.
+#   - 5: (Recommended) At most ~5 minutes of video are redone after a crash.
+#   - 0: Disable segmentation (single pass, no resume). Not advisable for
+#        long tapes: a multi-hour encode would restart from zero after a
+#        power cut.
+#   Long tapes need disk space for the finished segments plus the joined
+#   file at the end (about twice the output size); the log projects both
+#   after the first segment and refuses the join if the drive is short.
+resume_segment_minutes: 5
+
 # ------------------------------------------------------------------------------
 # VIDEO STANDARDS & SYNC
 # ------------------------------------------------------------------------------

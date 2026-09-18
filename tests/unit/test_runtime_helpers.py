@@ -453,19 +453,19 @@ def _run_darwin_ffmpeg_install(tmp_path: Path, archives: dict[str, dict[str, byt
     mirror.mkdir()
     for tool, members in archives.items():
         _make_zip(mirror / f"{tool}-9.0.1.zip", members)
-    stub_bin = tmp_path / "stub_bin"
-    stub_bin.mkdir()
-    curl_stub = stub_bin / "curl"
     # curl -fsSL <url> -o <dest>  ->  copy the mirrored archive for that URL.
-    curl_stub.write_text(
-        "#!/usr/bin/env bash\n"
-        'url="${@: -3:1}"; dest="${@: -1}"\n'
-        f'src="{mirror}/$(basename "$url")"\n'
-        '[ -f "$src" ] || exit 22\n'
-        'cp "$src" "$dest"\n',
-        encoding="utf-8",
+    # A shell function shadows the real curl whatever PATH the bash in use
+    # builds for itself. A stub executable prepended to PATH did not survive
+    # Git's bin\bash.exe wrapper, which puts Git's own bin directories first
+    # and let the real curl download the real archives.
+    curl_fn = (
+        "curl() {\n"
+        '    url="${@: -3:1}"; dest="${@: -1}"\n'
+        f'    src="{_bash_path(mirror)}/$(basename "$url")"\n'
+        '    [ -f "$src" ] || return 22\n'
+        '    cp "$src" "$dest"\n'
+        "}\n"
     )
-    curl_stub.chmod(0o755)
 
     venv_dir = tmp_path / "venv"
     (venv_dir / "bin").mkdir(parents=True)
@@ -473,13 +473,12 @@ def _run_darwin_ffmpeg_install(tmp_path: Path, archives: dict[str, dict[str, byt
     ff_tmp.mkdir()
     driver = (
         "set -u\n"
-        f"{sha_fn}\n{fn_text}\n"
-        f'VENV_PYTHON="{sys.executable}"\nVENV_DIR="{venv_dir}"\nFF_OK=0\n'
-        f'install_darwin_ffmpeg "{ff_tmp}"\n'
+        f"{curl_fn}{sha_fn}\n{fn_text}\n"
+        f'VENV_PYTHON="{_bash_path(sys.executable)}"\nVENV_DIR="{_bash_path(venv_dir)}"\nFF_OK=0\n'
+        f'install_darwin_ffmpeg "{_bash_path(ff_tmp)}"\n'
         'echo "FF_OK=$FF_OK"\n'
     )
-    env = {**os.environ, "PATH": f"{stub_bin}{os.pathsep}{os.environ.get('PATH', '')}"}
-    result = subprocess.run(["bash", "-c", driver], capture_output=True, text=True, env=env, check=False)
+    result = subprocess.run([POSIX_BASH, "-c", driver], capture_output=True, text=True, check=False)
     return result, venv_dir / "bin", ff_tmp
 
 
@@ -487,11 +486,67 @@ def _installed_names(bin_dir: Path) -> set[str]:
     return {p.name for p in bin_dir.iterdir()}
 
 
-# install.sh is the POSIX installer; on Windows `bash` on PATH is typically the WSL
-# launcher (or absent), so the shell-level tests only run on Linux/macOS.
+_GIT_BASH_CANDIDATES = (
+    r"C:\Program Files\Git\usr\bin\bash.exe",
+    r"C:\Program Files\Git\bin\bash.exe",
+)
+
+
+def _is_posix_bash(candidate) -> bool:
+    """Return whether a path is a usable POSIX bash.
+
+    Windows ships a ``bash.exe`` in System32 that only launches WSL, so that one
+    is rejected; Git for Windows provides a genuine MSYS2 bash instead.
+    """
+    if not candidate:
+        return False
+    resolved = Path(candidate)
+    if resolved.stem.lower() != "bash" or "system32" in str(resolved).lower():
+        return False
+    return resolved.exists()
+
+
+def _resolve_posix_bash() -> str | None:
+    """Locate a real POSIX bash, including Git Bash on Windows.
+
+    On Windows the MSYS2 bash under ``Git\\usr\\bin`` is preferred over
+    whatever ``bash`` is first on PATH: GitHub's Windows runners put ``Git\\bin``
+    there, and its ``bash.exe`` is a wrapper that prepends Git's own bin
+    directories to PATH before running the same MSYS2 bash, so anything a
+    test prepends to PATH is shadowed by Git's tools.
+    """
+    candidates = []
+    if sys.platform == "win32":
+        candidates.extend(_GIT_BASH_CANDIDATES)
+    candidates.append(shutil.which("bash"))
+    return next((str(Path(candidate)) for candidate in candidates if _is_posix_bash(candidate)), None)
+
+
+POSIX_BASH = _resolve_posix_bash()
+
+
+def _bash_path(path) -> str:
+    """Render a path for a bash command line.
+
+    Git Bash needs ``/c/Users/...`` rather than ``C:\\Users\\...``: a Windows
+    path embedded in a double-quoted shell string would have its backslashes
+    eaten as escape characters.
+    """
+    text = str(path)
+    if sys.platform != "win32":
+        return text
+    drive, rest = os.path.splitdrive(text)
+    rest = rest.replace("\\", "/")
+    if drive:
+        return f"/{drive[0].lower()}{rest}"
+    return rest
+
+
+# install.sh is the POSIX installer. It runs wherever a real POSIX bash exists,
+# including Git Bash on Windows; only a host without one skips these.
 _needs_bash = pytest.mark.skipif(
-    sys.platform == "win32" or shutil.which("bash") is None,
-    reason="requires a POSIX bash (install.sh is not used on Windows)",
+    POSIX_BASH is None,
+    reason="requires a POSIX bash (no Git Bash or system bash found)",
 )
 
 _FFMPEG_STUB = b"#!/bin/sh\necho ffmpeg\n"
@@ -587,3 +642,71 @@ def test_get_macos_cpu_name_parses_sysctl():
     with patch("subprocess.check_output", return_value=b"Apple M2 Max\n"):
         val = getattr(utils, "_get_macos_cpu_name")()
         assert val == "Apple M2 Max"
+
+
+def test_cleanup_temp_files_only_removes_legacy_artifacts_for_stem(tmp_path):
+    """Legacy per-source leftovers go; unrelated user files and other stems stay."""
+    utils = importlib.import_module("modules.core.utils")
+    legacy = [
+        "tape_temp_script.vpy",
+        "tape_intermediate.mov",
+        "tape.mpg.ffindex",
+        "tape.mpg.lwi",
+        "tape_deinterlaced_prores_part.mov",
+    ]
+    keep = ["tape.mpg", "my_template.vpy", "other_temp_script.vpy", "tape_deinterlaced_prores.mov"]
+    for name in legacy + keep:
+        (tmp_path / name).write_bytes(b"x")
+
+    utils.cleanup_temp_files(tmp_path, "tape")
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(keep)
+
+
+def test_cleanup_legacy_cache_dir_removes_only_our_folder(tmp_path):
+    """The pre-1.2 system-temp index cache is removed; siblings are untouched."""
+    utils = importlib.import_module("modules.core.utils")
+    ours = tmp_path / "auto-vhs-deinterlancer" / "ffms2"
+    ours.mkdir(parents=True)
+    (ours / "abc.ffindex").write_bytes(b"x")
+    other = tmp_path / "someone-else"
+    other.mkdir()
+
+    with patch("modules.core.utils.tempfile.gettempdir", return_value=str(tmp_path)):
+        utils.cleanup_legacy_cache_dir()
+        utils.cleanup_legacy_cache_dir()
+
+    assert not (tmp_path / "auto-vhs-deinterlancer").exists()
+    assert other.is_dir()
+
+
+def test_get_available_ffmpeg_encoders_parses_listing():
+    """The encoder listing is parsed into bare encoder names."""
+    utils = importlib.import_module("modules.core.utils")
+    utils.get_available_ffmpeg_encoders.cache_clear()
+    listing = (
+        b"Encoders:\n"
+        b" V..... = Video\n"
+        b" ------\n"
+        b" V....D libaom-av1           libaom AV1 (codec av1)\n"
+        b" V..... libsvtav1            SVT-AV1 encoder (codec av1)\n"
+        b" A....D aac                  AAC (Advanced Audio Coding)\n"
+    )
+
+    with patch("modules.core.utils.subprocess.check_output", return_value=listing):
+        names = utils.get_available_ffmpeg_encoders()
+
+    utils.get_available_ffmpeg_encoders.cache_clear()
+    assert {"libaom-av1", "libsvtav1", "aac"} <= names
+    assert "Encoders:" not in names
+
+
+def test_get_available_ffmpeg_encoders_returns_empty_on_failure():
+    """A missing or failing FFmpeg yields an empty set instead of raising."""
+    utils = importlib.import_module("modules.core.utils")
+    utils.get_available_ffmpeg_encoders.cache_clear()
+
+    with patch("modules.core.utils.subprocess.check_output", side_effect=OSError("no ffmpeg")):
+        assert utils.get_available_ffmpeg_encoders() == frozenset()
+
+    utils.get_available_ffmpeg_encoders.cache_clear()

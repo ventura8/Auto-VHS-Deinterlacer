@@ -33,15 +33,19 @@ def setup_path():
 
 @pytest.fixture(autouse=True)
 def _clear_opencl_qtgmc_probe_cache():
-    """Drop cached VapourSynth OpenCL-probe results between tests.
+    """Drop cached hardware/FFmpeg probe results between tests.
 
-    ``modules.core.utils.vapoursynth_has_opencl_qtgmc`` is ``lru_cache``-wrapped,
-    so a probe result (real or mocked) would otherwise leak into later tests.
+    ``vapoursynth_has_opencl_qtgmc`` and ``get_available_ffmpeg_encoders`` are
+    ``lru_cache``-wrapped, so a probe result (real or mocked) would otherwise
+    leak into later tests.
     """
-    probe = importlib.import_module("modules.core.utils").vapoursynth_has_opencl_qtgmc
-    probe.cache_clear()
+    utils = importlib.import_module("modules.core.utils")
+    probes = (utils.vapoursynth_has_opencl_qtgmc, utils.get_available_ffmpeg_encoders)
+    for probe in probes:
+        probe.cache_clear()
     yield
-    probe.cache_clear()
+    for probe in probes:
+        probe.cache_clear()
 
 
 @pytest.fixture

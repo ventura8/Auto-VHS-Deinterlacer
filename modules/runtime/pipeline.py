@@ -1,11 +1,7 @@
 """Main video processing pipeline for deinterlacing and encoding.
 
-Architecture notes
-------------------
-This module intentionally keeps the end-to-end orchestration logic close together
-so operators can debug a failed job from one place. The tradeoff is file size,
-so this header documents key invariants and execution phases that must remain
-stable during future refactors.
+This module keeps the end-to-end orchestration together so a failed job can be
+debugged from one place; the header records the phases and invariants.
 
 Execution phases
 ----------------
@@ -14,39 +10,40 @@ Execution phases
     - Ignore already-processed filenames by suffix markers.
 2. Pre-flight preparation:
     - Build deterministic output path from encoder + config suffix policy.
-    - Clean stale temp/index artifacts before script generation.
-    - Skip processing if a valid output already exists.
+    - Sweep legacy temp/index artifacts left beside the source by old versions.
+    - Skip processing if a valid output already exists (and drop its workspace).
 3. Script + metadata stage:
-    - Generate VPY script with runtime profile settings.
+    - Create the per-video workspace ``<file name>.autovhs-tmp/`` next to the source.
+      Every temp and cache file (script, indexes, segments, mux output) lives there.
+    - Generate VPY script with runtime profile settings and workspace index dir.
     - Probe VPY output with vspipe for frame count, FPS, and pixel format.
-4. Encoding stage:
-    - Stream VapourSynth frames directly to FFmpeg in one pass.
-    - Preserve source audio and apply optional drift correction filters.
-    - Track progress, ETA, and speed from FFmpeg stderr.
+    - Plan fixed-length segments and compare the settings fingerprint with the
+      saved workspace state; mismatched segments are discarded.
+4. Encoding stage (resumable):
+    - Encode each segment as video-only with vspipe ``--start/--end`` piped to
+      FFmpeg, writing ``seg_NNNN.part.<ext>`` and renaming on success.
+    - Segments already present and valid are skipped, so a rerun after a power
+      cut continues from the last completed segment.
+    - Track progress, ETA, and speed from FFmpeg stderr, offset by segment start.
 5. Finalization:
+    - Stream-copy concatenate segments and mux source audio (with optional
+      drift correction) into the workspace ``_part`` file.
     - Emit an explicit final 100 percent progress update on success.
     - Atomically rename part output to final output filename.
-    - Always perform robust temp file cleanup.
+    - Delete the workspace on success; keep it on failure for resume.
 
 Operational invariants
 ----------------------
 - Progress reporting must never regress from 100 percent after success.
 - Existing valid outputs must be skipped, not overwritten.
 - Corrupted existing outputs (zero duration) may be replaced.
-- Temp script and transient index artifacts are cleanup targets.
-- FFmpeg command must always map video from pipe and audio from source.
+- Nothing temporary is written outside the per-video workspace folder.
+- A successful run leaves only the final output behind.
+- Segment FFmpeg commands map video from the pipe only; the mux maps audio
+  from the source.
 - Audio drift correction remains bounded by safety thresholds from config.
 - Duration fallback must tolerate missing VPY frame metadata.
 - Pixel format fallback must remain conservative and encoder-safe.
-
-Patchability guarantees for tests
----------------------------------
-Many tests patch symbols in this module directly. Keep that behavior stable:
-- `get_duration`, `create_vpy_script`, `get_vpy_info`, `cleanup_temp_files`
-  are patch targets in integration tests.
-- `_run_encoding_pipeline` and `_build_ffmpeg_cmd` are called directly in tests.
-- `setup_environment`, `check_requirements`, and `get_input_files` are patched
-  around `main()` to isolate orchestration behavior.
 
 Error-handling contract
 -----------------------
@@ -54,12 +51,6 @@ Error-handling contract
   processing results, not raised to crash batch processing.
 - Batch loop failures should continue to next item after logging.
 - Interactive no-input flows should print guidance and allow graceful exit.
-
-Why comments are explicit here
-------------------------------
-This file coordinates user input, subprocess piping, metadata probing, and
-batch accounting. Dense inline documentation helps preserve intent when tuning
-hardware profiles, changing encoder arguments, or evolving progress parsing.
 """
 
 import io
@@ -80,12 +71,16 @@ from modules.core.config import (
     DEBUG_MODE,
     DEINTERLACE_MODE,
     ENCODER,
+    FIELD_ORDER,
     HW_SETTINGS,
     PERF_PROFILE,
+    RESUME_SEGMENT_MINUTES,
+    TV_STANDARD,
 )
 from modules.core.utils import (
     _show_banner,
     check_requirements,
+    cleanup_legacy_cache_dir,
     cleanup_temp_files,
     get_cpu_name,
     get_duration,
@@ -101,13 +96,39 @@ from modules.core.utils import (
     setup_environment,
     update_progress,
 )
-from modules.runtime.vspipe import create_vpy_script, get_vpy_info, log_vspipe_output, resolve_vspipe_requests
+from modules.runtime.encoders import get_video_encoder_args, log_encoder_execution_path
+from modules.runtime.inputs import get_input_files
+from modules.runtime.vspipe import (
+    create_vpy_script,
+    get_vpy_info,
+    log_vspipe_output,
+    resolve_info_timeout,
+    resolve_vspipe_requests,
+)
+from modules.runtime.workspace import (
+    VideoWorkspace,
+    build_workspace,
+    compute_fingerprint,
+    compute_source_identity,
+    free_space_bytes,
+    load_state,
+    mux_space_needed,
+    plan_segments,
+    prepare_workspace,
+    project_output_bytes,
+    remove_workspace,
+    segment_part_path,
+    segment_path,
+    single_segment_reason,
+    sync_source_identity,
+    sync_state,
+    write_concat_list,
+)
 
 # ==============================================================================
 # MAIN PIPELINE
 # ==============================================================================
 
-VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".ts", ".m2ts", ".mpg", ".mpeg"}
 VS_TO_FFMPEG_MAP = {
     "YUV420P8": "yuv420p",
     "YUV420P10": "yuv420p10le",
@@ -126,37 +147,6 @@ VS_TO_FFMPEG_MAP = {
 def _get_vspipe_requests() -> int:
     """Resolve vspipe request depth from config, defaulting to cpu_threads."""
     return resolve_vspipe_requests(CONFIG, HW_SETTINGS)
-
-
-def _is_candidate_video(path: Path, video_exts: set) -> bool:
-    """Return whether a path is an unprocessed video file input."""
-    excluded_tokens = ("_deinterlaced", "_intermediate")
-    return path.is_file() and path.suffix.lower() in video_exts and not any(token in path.name for token in excluded_tokens)
-
-
-def _scan_directory(path: Path, video_exts: set) -> list:
-    """Scans a directory for video files, excluding processed ones."""
-    log_info(f">> Scanning folder: {path.name}")
-    return [file_path for file_path in path.iterdir() if _is_candidate_video(file_path, video_exts)]
-
-
-def _append_cli_path(files: list[Path], path: Path, video_exts: set):
-    """Append inputs derived from one CLI path argument."""
-    if _is_candidate_video(path, video_exts):
-        files.append(path)
-        return
-    if path.is_dir():
-        files.extend(_scan_directory(path, video_exts))
-
-
-def _parse_cli_args(video_exts: set) -> list:
-    """Parses command line arguments for input files or folders."""
-    files = []
-    if len(sys.argv) > 1:
-        log_info(f">> Arguments Detected: {len(sys.argv) - 1} items")
-        for arg in sys.argv[1:]:
-            _append_cli_path(files, Path(arg), video_exts)
-    return files
 
 
 def _get_audio_sync_skip_reason(audio_duration: float, video_duration: float, abs_diff: float) -> str | None:
@@ -186,73 +176,6 @@ def _get_excessive_drift_message(video_duration: float, abs_diff: float) -> str 
     return None
 
 
-def _print_interactive_help():
-    """Print the interactive usage prompt."""
-    print("\n" + "-" * 60)
-    print(" [HOW TO USE]")
-    print(" 1. Drag and Drop a video file (or folder) onto this window.")
-    print(" 2. Or paste the file path below.")
-    print("-" * 60 + "\n")
-
-
-def _strip_wrapping_quotes(value: str) -> str:
-    """Remove a matching pair of surrounding quotes and unescape spaces from a user-supplied path."""
-    cleaned = value.strip()
-    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in ('"', "'"):
-        cleaned = cleaned[1:-1]
-    if sys.platform != "win32":
-        cleaned = cleaned.replace("\\ ", " ")
-    return cleaned
-
-
-def _expand_input_path(path: Path, video_exts: set) -> list[Path]:
-    """Expand a file or directory argument into input video paths."""
-    if path.is_file():
-        return [path] if _is_candidate_video(path, video_exts) else []
-    if path.is_dir():
-        return _scan_directory(path, video_exts)
-    return []
-
-
-def _get_default_input_files(video_exts: set) -> list[Path]:
-    """Fallback to scanning the default input directory when no input was entered."""
-    default_input = Path("input")
-    if default_input.exists() and default_input.is_dir():
-        log_info(">> No input provided. Auto-scanning 'input' folder...")
-        return _scan_directory(default_input, video_exts)
-    return []
-
-
-def _get_interactive_input(video_exts: set) -> list:
-    """Gets input files from interactive user prompt."""
-    try:
-        _print_interactive_help()
-        user_input = input(">> Please Drag & Drop a video file here and press Enter: ").strip()
-        log_debug(f"User Input: {user_input}")
-        if not user_input:
-            return _get_default_input_files(video_exts)
-
-        cleaned_input = _strip_wrapping_quotes(user_input)
-        path = Path(cleaned_input)
-        if path.exists():
-            return _expand_input_path(path, video_exts)
-    except (EOFError, KeyboardInterrupt):
-        log_info("\n>> Interactive input cancelled. Exiting.")
-    return []
-
-
-def get_input_files():
-    """Gathers input files from CLI args or interactive prompt."""
-    # 1. Drag & Drop (CLI Args)
-    files = _parse_cli_args(VIDEO_EXTENSIONS)
-
-    # 2. Interactive Prompt
-    if not files:
-        files = _get_interactive_input(VIDEO_EXTENSIONS)
-
-    return files
-
-
 def _get_output_path(input_path: Path) -> Path:
     """Constructs the output file path based on config and encoder."""
     stem = input_path.stem
@@ -279,58 +202,6 @@ def _calculate_audio_sync(input_path: Path, video_duration: float) -> float:
     return audio_duration / video_duration
 
 
-def _get_video_encoder_args(hardware_settings: dict) -> list[str]:
-    """Return the configured FFmpeg video encoder argument list."""
-    if ENCODER == "prores":
-        return [
-            "-c:v",
-            "prores_ks",
-            "-profile:v",
-            "3",
-            "-vendor",
-            "apl0",
-            "-bits_per_mb",
-            "8000",
-            "-pix_fmt",
-            "yuv422p10le",
-        ]
-    if hardware_settings.get("has_av1_nvenc", False):
-        return [
-            "-c:v",
-            "av1_nvenc",
-            "-preset",
-            "p5",
-            "-cq",
-            "22",
-            "-b:v",
-            "0",
-            "-pix_fmt",
-            "p010le",
-        ]
-    return [
-        "-c:v",
-        "libsvtav1",
-        "-preset",
-        "6",
-        "-crf",
-        "22",
-        "-pix_fmt",
-        "yuv420p10le",
-    ]
-
-
-def _log_encoder_execution_path(hardware_settings: dict):
-    """Log whether the active video encoder path is GPU or CPU based."""
-    if ENCODER == "av1":
-        if hardware_settings.get("has_av1_nvenc", False):
-            log_info("   [ENCODER] AV1 path: NVIDIA GPU enabled (av1_nvenc).")
-            return
-        log_info("   [ENCODER] AV1 path: CPU fallback enabled (libsvtav1).")
-        return
-
-    log_info("   [ENCODER] ProRes path: CPU encoder enabled (prores_ks).")
-
-
 def _get_audio_filter_args(atempo: float) -> list[str]:
     """Return optional FFmpeg audio filter arguments."""
     audio_filters = []
@@ -345,15 +216,13 @@ def _get_audio_filter_args(atempo: float) -> list[str]:
 
 
 def _build_ffmpeg_cmd(
-    input_path: Path,
     output_file: Path,
-    atempo: float,
     fps: float = 30000 / 1001,
     width: int = 720,
     height: int = 576,
     pixel_format: str = "yuv420p16le",
 ) -> list:
-    """Builds the FFmpeg command line."""
+    """Build the video-only FFmpeg command that encodes one piped segment."""
     ffmpeg_exe = shutil.which("ffmpeg") or "ffmpeg"
     ffmpeg_threads = max(1, int(HW_SETTINGS.get("cpu_threads", os.cpu_count() or 8)))
     cmd = [
@@ -371,16 +240,40 @@ def _build_ffmpeg_cmd(
         pixel_format,
         "-i",
         "-",
+        "-map",
+        "0:v:0",
+        "-an",
+    ]
+    cmd.extend(["-threads:v", str(ffmpeg_threads)])
+    log_encoder_execution_path(ENCODER, HW_SETTINGS)
+    cmd.extend(get_video_encoder_args(ENCODER, HW_SETTINGS))
+    cmd.append(str(output_file))
+    return cmd
+
+
+def _build_mux_cmd(input_path: Path, concat_list: Path, output_file: Path, atempo: float) -> list:
+    """Build the FFmpeg command that joins segments and muxes source audio."""
+    ffmpeg_exe = shutil.which("ffmpeg") or "ffmpeg"
+    cmd = [
+        ffmpeg_exe,
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(concat_list),
         "-i",
         str(input_path),
         "-map",
         "0:v:0",
+        # Optional: a video-only source must still finalize instead of failing
+        # the whole job on "Stream map '1:a:0' matches no streams".
         "-map",
-        "1:a:0",
+        "1:a:0?",
+        "-c:v",
+        "copy",
     ]
-    cmd.extend(["-threads:v", str(ffmpeg_threads)])
-    _log_encoder_execution_path(HW_SETTINGS)
-    cmd.extend(_get_video_encoder_args(HW_SETTINGS))
     cmd.extend(_get_audio_filter_args(atempo))
     cmd.extend(["-c:a", AUDIO_CODEC, "-b:a", str(AUDIO_BITRATE), str(output_file)])
     return cmd
@@ -427,22 +320,28 @@ def _format_eta(speed: str | None, duration_sec: float, current_sec: float) -> s
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
-def _update_encoding_progress(line_str: str, duration_sec: float, total_ts: str | None):
-    """Parse and forward FFmpeg progress updates."""
+def _update_encoding_progress(line_str: str, duration_sec: float, total_ts: str | None, offset_sec: float = 0.0):
+    """Parse and forward FFmpeg progress updates, offset by the segment start."""
     if "frame=" not in line_str:
         return
 
-    sec, current_ts, speed = parse_ffmpeg_time(line_str)
+    sec, _current_ts, speed = parse_ffmpeg_time(line_str)
     if not sec or duration_sec <= 0:
         return
 
-    pct = (sec / duration_sec) * 100
-    eta_str = _format_eta(speed, duration_sec, sec)
-    time_display = f"{current_ts} / {total_ts or '00:00:00,000'}"
-    update_progress(pct, "Encoding", time_display, speed, eta_str, process_name="FFmpeg")
+    overall_sec = min(duration_sec, offset_sec + sec)
+    pct = (overall_sec / duration_sec) * 100
+    eta_str = _format_eta(speed, duration_sec, overall_sec)
+    update_progress(pct, "Encoding", _format_time_display(overall_sec, total_ts), speed, eta_str, process_name="FFmpeg")
 
 
-def _read_ffmpeg_stderr(stderr_pipe, duration_sec: float, total_ts: str | None) -> list[str]:
+def _format_time_display(overall_sec: float, total_ts: str | None) -> str:
+    """Render ``current / total`` timestamps for the progress bar."""
+    current = _format_total_timestamp(overall_sec) or "00:00:00,000"
+    return f"{current} / {total_ts or '00:00:00,000'}"
+
+
+def _read_ffmpeg_stderr(stderr_pipe, duration_sec: float, total_ts: str | None, offset_sec: float = 0.0) -> list[str]:
     """Capture recent FFmpeg stderr lines while emitting progress updates."""
     stderr_lines: list[str] = []
     if not stderr_pipe:
@@ -454,13 +353,13 @@ def _read_ffmpeg_stderr(stderr_pipe, duration_sec: float, total_ts: str | None) 
         stderr_lines.append(line_str)
         if len(stderr_lines) > 20:
             stderr_lines.pop(0)
-        _update_encoding_progress(line_str, duration_sec, total_ts)
+        _update_encoding_progress(line_str, duration_sec, total_ts, offset_sec)
 
     return stderr_lines
 
 
-def _finalize_encoding_success(temp_script: Path, total_ts: str | None):
-    """Emit final success progress and clean up the temporary script."""
+def _finalize_encoding_success(workspace: VideoWorkspace, total_ts: str | None):
+    """Emit final success progress and delete the per-video workspace."""
     if total_ts:
         final_time = f"{total_ts} / {total_ts}"
         update_progress(100.0, "Encoding", final_time, None, "00:00:00", process_name="FFmpeg")
@@ -468,11 +367,9 @@ def _finalize_encoding_success(temp_script: Path, total_ts: str | None):
         update_progress(100.0, "Encoding", process_name="FFmpeg")
 
     log_info("\n\n[SUCCESS] Deinterlacing finished.")
-    if temp_script.exists():
-        try:
-            os.remove(temp_script)
-        except OSError:
-            pass
+    remove_workspace(workspace)
+    if workspace.root.exists():
+        log_error(f"   [CLEANUP] Could not remove workspace folder: {workspace.root}")
 
 
 def _log_ffmpeg_failure(returncode: int | None, stderr_lines: list[str]):
@@ -483,7 +380,7 @@ def _log_ffmpeg_failure(returncode: int | None, stderr_lines: list[str]):
         log_error(f"   {err_line}")
 
 
-def _collect_pipeline_stderr(p_vspipe, p_ffmpeg, duration_sec: float, total_ts: str | None) -> list[str]:
+def _collect_pipeline_stderr(p_vspipe, p_ffmpeg, duration_sec: float, total_ts: str | None, offset_sec: float = 0.0) -> list[str]:
     """Stream vspipe logs, collect FFmpeg stderr, and wait for both processes."""
     if p_vspipe.stdout:
         p_vspipe.stdout.close()
@@ -491,7 +388,7 @@ def _collect_pipeline_stderr(p_vspipe, p_ffmpeg, duration_sec: float, total_ts: 
     t_vspipe = threading.Thread(target=log_vspipe_output, args=(p_vspipe.stderr,))
     t_vspipe.daemon = True
     t_vspipe.start()
-    stderr_lines = _read_ffmpeg_stderr(p_ffmpeg.stderr, duration_sec, total_ts)
+    stderr_lines = _read_ffmpeg_stderr(p_ffmpeg.stderr, duration_sec, total_ts, offset_sec)
 
     p_ffmpeg.wait()
     p_vspipe.wait()
@@ -508,8 +405,8 @@ def _get_pipeline_failure_code(p_ffmpeg, p_vspipe) -> int | None:
     return p_ffmpeg.returncode if p_ffmpeg.returncode != 0 else p_vspipe.returncode
 
 
-def _run_encoding_pipeline(vspipe_cmd, ffmpeg_cmd, duration_sec):
-    """Executes the VS->FFmpeg pipeline and monitors progress."""
+def _run_encoding_pipeline(vspipe_cmd, ffmpeg_cmd, duration_sec, offset_sec: float = 0.0):
+    """Execute the VS->FFmpeg pipeline for one segment and monitor progress."""
     try:
         total_ts = _format_total_timestamp(duration_sec)
         vspipe_env = _prepare_vspipe_env(vspipe_cmd)
@@ -521,7 +418,7 @@ def _run_encoding_pipeline(vspipe_cmd, ffmpeg_cmd, duration_sec):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             ) as p_ffmpeg:
-                stderr_lines = _collect_pipeline_stderr(p_vspipe, p_ffmpeg, duration_sec, total_ts)
+                stderr_lines = _collect_pipeline_stderr(p_vspipe, p_ffmpeg, duration_sec, total_ts, offset_sec)
 
         if _pipeline_succeeded(p_ffmpeg, p_vspipe):
             return True
@@ -580,7 +477,14 @@ def _build_result(
     }
 
 
-def _get_existing_output_result(input_path: Path, output_file: Path, started_at: float, work_dir: Path, stem: str) -> dict | None:
+def _get_existing_output_result(
+    input_path: Path,
+    output_file: Path,
+    started_at: float,
+    work_dir: Path,
+    stem: str,
+    workspace: VideoWorkspace | None = None,
+) -> dict | None:
     """Return a skip result when a valid output already exists."""
     if not output_file.exists():
         return None
@@ -589,6 +493,8 @@ def _get_existing_output_result(input_path: Path, output_file: Path, started_at:
     if existing_duration > 0:
         log_info(f"   [SKIP] Output exists and valid: {output_file.name}")
         cleanup_temp_files(work_dir, stem)
+        if workspace is not None:
+            remove_workspace(workspace)
         _log_video_summary(input_path, started_at, "skipped", output_file)
         return _build_result(input_path, output_file, "skipped", time.time() - started_at)
 
@@ -627,14 +533,12 @@ def _build_missing_input_result(input_path: Path, started_at: float) -> dict:
     return _build_result(input_path, None, "not_found", time.time() - started_at)
 
 
-def _prepare_processing_paths(input_path: Path) -> tuple[Path, str, Path, Path, Path]:
-    """Return the working paths used by one processing job."""
+def _prepare_processing_paths(input_path: Path) -> tuple[Path, str, Path, VideoWorkspace]:
+    """Return the working paths and workspace layout used by one processing job."""
     work_dir = input_path.parent
     stem = input_path.stem
     output_file = _get_output_path(input_path)
-    temp_script = work_dir / f"{stem}_temp_script.vpy"
-    temp_output = output_file.with_name(f"{output_file.stem}_part{output_file.suffix}")
-    return work_dir, stem, output_file, temp_script, temp_output
+    return work_dir, stem, output_file, build_workspace(input_path, output_file)
 
 
 def _finalize_processing_result(
@@ -642,51 +546,234 @@ def _finalize_processing_result(
     output_file: Path,
     started_at: float,
     duration_sec: float,
-    success: bool,
-    rename_success: bool,
+    final_success: bool,
 ) -> dict:
     """Build and log the final process result payload."""
     elapsed_sec = time.time() - started_at
     speed_x = _get_speed_multiplier(duration_sec, elapsed_sec)
-    final_success = success and rename_success
     final_status = _get_processing_status(final_success)
     final_output = output_file if final_success and output_file.exists() else None
     _log_video_summary(input_path, started_at, final_status, final_output, speed_x)
     return _build_result(input_path, final_output, final_status, elapsed_sec, duration_sec, speed_x)
 
 
-def _build_processing_commands(input_path: Path, temp_script: Path, temp_output: Path):
-    """Generate metadata and commands needed for a single encoding run."""
+def _resolve_segment_frames(fps: float) -> int:
+    """Convert the configured segment length in minutes to a frame count."""
+    return int(round(max(0.0, float(RESUME_SEGMENT_MINUTES)) * 60.0 * fps))
+
+
+def _build_fingerprint_settings(segment_frames: int) -> dict:
+    """Collect every setting that changes segment content, for resume validation.
+
+    The hardware-derived values matter as much as the config ones: segments are
+    concatenated with stream copy, so reusing an ``av1_nvenc`` segment next to a
+    ``libsvtav1`` one would produce a broken output, and the QTGMC OpenCL device
+    settings change the decoded frames themselves.
+    """
+    return {
+        "encoder": ENCODER,
+        "mode": DEINTERLACE_MODE,
+        "field_order": FIELD_ORDER,
+        "tv_standard": TV_STANDARD,
+        "qtgmc": CONFIG.get("qtgmc_settings", {}),
+        "segment_frames": segment_frames,
+        # Resolved exactly as _build_ffmpeg_cmd and create_vpy_script consume them.
+        "video_encoder_args": get_video_encoder_args(ENCODER, HW_SETTINGS),
+        "use_gpu_opencl": bool(HW_SETTINGS.get("use_gpu_opencl", False)),
+        "gpu_device_index": HW_SETTINGS.get("gpu_device_index", 0),
+    }
+
+
+def _log_segment_plan(segments: list, reused: bool, total_frames: int | None, segment_frames: int):
+    """Describe the segment plan, and say so plainly when resume is unavailable."""
+    reason = single_segment_reason(total_frames, segment_frames)
+    if reason:
+        log_error(f"   [RESUME] Single open-ended segment because {reason}; an interrupted run cannot resume.")
+        return
+    log_info(f"   [RESUME] Plan: {len(segments)} segment(s), {RESUME_SEGMENT_MINUTES} min each")
+    if reused:
+        log_info("   [RESUME] Workspace matches current settings; completed segments will be reused.")
+
+
+def _sync_source_identity_with_log(input_path: Path, workspace: VideoWorkspace):
+    """Validate the source identity, reporting only a genuine change.
+
+    A brand-new workspace has no recorded identity and is silently initialised;
+    the log line is reserved for a workspace that was built from a different
+    file, where discarding the indexes and segments is worth telling the user.
+    """
+    previous_source = load_state(workspace).get("source_id")
+    unchanged = sync_source_identity(workspace, compute_source_identity(input_path))
+    if previous_source and not unchanged:
+        log_info("   [RESUME] Source file changed since the workspace was created; indexes and segments discarded.")
+
+
+def _build_processing_commands(input_path: Path, workspace: VideoWorkspace) -> dict:
+    """Generate the script, probe metadata, and plan the resumable encode job."""
+    # Must run before the script is generated or probed: a replaced source with
+    # the same name would otherwise be read through the previous file's index.
+    _sync_source_identity_with_log(input_path, workspace)
+
     log_info(">> Generating VapourSynth Restoration Script...")
-    create_vpy_script(str(input_path), str(temp_script), DEINTERLACE_MODE)
+    create_vpy_script(str(input_path), str(workspace.script), DEINTERLACE_MODE, cache_dir=str(workspace.index_dir))
 
     log_info(">> Verifying Script with vspipe...")
     vspipe_exe = resolve_vspipe_executable(get_project_root())
-    total_frames, fps, width, height, fmt_name = get_vpy_info(vspipe_exe, str(temp_script))
-    duration_sec = total_frames / (fps if fps else 29.97) if total_frames else get_duration(str(input_path))
+    probe_timeout = resolve_info_timeout(input_path.stat().st_size)
+    total_frames, fps, width, height, fmt_name = get_vpy_info(vspipe_exe, str(workspace.script), probe_timeout)
+    safe_fps = fps if fps else 29.97
+    duration_sec = total_frames / safe_fps if total_frames else get_duration(str(input_path))
     safe_width, safe_height = _resolve_dimensions(width, height)
     pixel_format = _resolve_pixel_format(fmt_name)
     log_info(f"   [INFO] Stream Format: {fmt_name} -> {pixel_format}")
 
-    atempo = _calculate_audio_sync(input_path, duration_sec)
-    ffmpeg_cmd = _build_ffmpeg_cmd(
-        input_path,
-        temp_output,
-        atempo,
-        fps=(fps if fps else 29.97),
-        width=safe_width,
-        height=safe_height,
-        pixel_format=pixel_format,
+    segment_frames = _resolve_segment_frames(safe_fps)
+    segments = plan_segments(total_frames, segment_frames)
+    reused = sync_state(workspace, compute_fingerprint(input_path, _build_fingerprint_settings(segment_frames)))
+    _log_segment_plan(segments, reused, total_frames, segment_frames)
+
+    return {
+        "duration_sec": duration_sec,
+        "fps": safe_fps,
+        "width": safe_width,
+        "height": safe_height,
+        "pixel_format": pixel_format,
+        "atempo": _calculate_audio_sync(input_path, duration_sec),
+        "vspipe_exe": vspipe_exe,
+        "segments": segments,
+        "total_frames": total_frames,
+    }
+
+
+def _build_segment_vspipe_cmd(vspipe_exe: str, script: Path, start: int, end: int | None) -> list[str]:
+    """Build the vspipe command for one frame range of the script."""
+    cmd = [vspipe_exe, "--requests", str(_get_vspipe_requests())]
+    if end is not None:
+        cmd.extend(["--start", str(start), "--end", str(end)])
+    cmd.extend([str(script), "-"])
+    return cmd
+
+
+def _segment_is_complete(segment_file: Path) -> bool:
+    """Return whether a finished segment exists and decodes to a real duration."""
+    return segment_file.exists() and get_duration(str(segment_file)) > 0
+
+
+def _promote_segment(part_file: Path, segment_file: Path) -> bool:
+    """Atomically rename a finished segment so a crash never leaves it half-marked."""
+    try:
+        part_file.replace(segment_file)
+        return True
+    except OSError as error:
+        log_error(f"Failed to finalize segment {part_file.name}: {error}")
+        return False
+
+
+def _encode_segment(job: dict, workspace: VideoWorkspace, index: int, extension: str) -> bool:
+    """Encode one segment unless a valid copy already exists in the workspace."""
+    start, end = job["segments"][index]
+    total = len(job["segments"])
+    segment_file = segment_path(workspace, index, extension)
+    if _segment_is_complete(segment_file):
+        log_info(f"   [RESUME] Segment {index + 1}/{total} already complete, skipping.")
+        return True
+
+    log_info(f"\n>> Segment {index + 1}/{total}: frames {start}-{end if end is not None else 'end'}")
+    part_file = segment_part_path(workspace, index, extension)
+    vspipe_cmd = _build_segment_vspipe_cmd(job["vspipe_exe"], workspace.script, start, end)
+    ffmpeg_cmd = _build_ffmpeg_cmd(part_file, job["fps"], job["width"], job["height"], job["pixel_format"])
+    log_debug(f"   [DEBUG] VSPIPE CMD: {vspipe_cmd}")
+    log_debug(f"   [DEBUG] FFMPEG CMD: {ffmpeg_cmd}")
+
+    if not _run_encoding_pipeline(vspipe_cmd, ffmpeg_cmd, job["duration_sec"], start / job["fps"]):
+        return False
+    if not _promote_segment(part_file, segment_file):
+        return False
+    _log_space_projection(job, workspace, segment_file, start, end)
+    return True
+
+
+def _log_space_projection(job: dict, workspace: VideoWorkspace, segment_file: Path, start: int, end: int | None):
+    """After the first segment encoded in this run, project total and peak disk use.
+
+    A long tape can need hundreds of gigabytes, and the join briefly holds the
+    segments and the muxed part file together, so the operator is told early
+    rather than discovering it hours later at the last step.
+    """
+    if job.get("space_projected") or end is None:
+        return
+    job["space_projected"] = True
+    projected = project_output_bytes(segment_file.stat().st_size, end - start + 1, job.get("total_frames"))
+    if projected is None:
+        return
+    peak = 2 * projected
+    free = free_space_bytes(workspace)
+    log_info(f"   [SPACE] Projected output ~{projected / 1e9:.1f} GB; peak during the join ~{peak / 1e9:.1f} GB; free {free / 1e9:.1f} GB")
+    if free < peak:
+        log_error("   [SPACE] WARNING: free space is below the projected peak. Free space before the join or the job will stop there.")
+
+
+def _encode_all_segments(job: dict, workspace: VideoWorkspace, extension: str) -> bool:
+    """Encode every planned segment in order, stopping at the first failure."""
+    for index in range(len(job["segments"])):
+        if not _encode_segment(job, workspace, index, extension):
+            return False
+    return True
+
+
+def _run_mux_command(cmd: list) -> bool:
+    """Run the final mux command and report FFmpeg's stderr tail on failure."""
+    try:
+        result = subprocess.run(cmd, check=False, capture_output=True)
+    except (OSError, subprocess.SubprocessError) as error:
+        log_error(f"Unexpected error during mux: {error}")
+        return False
+    if result.returncode == 0:
+        return True
+    _log_ffmpeg_failure(result.returncode, result.stderr.decode("utf-8", errors="replace").splitlines()[-20:])
+    return False
+
+
+def _ensure_mux_space(workspace: VideoWorkspace, segment_files: list[Path]) -> bool:
+    """Refuse to start the join when it cannot finish; the segments stay for resume."""
+    needed = mux_space_needed(segment_files)
+    free = free_space_bytes(workspace)
+    if free >= needed:
+        return True
+    log_error(
+        f"   [SPACE] Not enough free space to join the segments: need ~{needed / 1e9:.1f} GB, free {free / 1e9:.1f} GB. "
+        "Segments are kept; free space and re-run the same file to continue at the join."
     )
-    vspipe_requests = _get_vspipe_requests()
-    log_info(f"   [VSPIPE] requests={vspipe_requests}")
-    vspipe_cmd = [vspipe_exe, "--requests", str(vspipe_requests), str(temp_script), "-"]
-    log_info(f"   [VSPIPE CMD] {' '.join(vspipe_cmd)}")
-    return duration_sec, ffmpeg_cmd, vspipe_cmd
+    return False
+
+
+def _mux_final_output(job: dict, workspace: VideoWorkspace, input_path: Path, extension: str) -> bool:
+    """Concatenate finished segments and mux the source audio into the part file."""
+    log_info("\n>> Joining segments and muxing source audio...")
+    segment_files = [segment_path(workspace, index, extension) for index in range(len(job["segments"]))]
+    if not _ensure_mux_space(workspace, segment_files):
+        return False
+    write_concat_list(workspace, segment_files)
+    mux_cmd = _build_mux_cmd(input_path, workspace.concat_list, workspace.output_part, job["atempo"])
+    log_debug(f"   [DEBUG] MUX CMD: {mux_cmd}")
+    return _run_mux_command(mux_cmd)
+
+
+def _run_resumable_encode(job: dict, workspace: VideoWorkspace, input_path: Path, output_file: Path) -> bool:
+    """Encode all segments, then produce the muxed part file inside the workspace."""
+    extension = output_file.suffix
+    if not _encode_all_segments(job, workspace, extension):
+        return False
+    return _mux_final_output(job, workspace, input_path, extension)
+
+
+def _log_resume_hint(workspace: VideoWorkspace):
+    """Tell the operator that the workspace was kept so the job can resume."""
+    log_info(f"   [RESUME] Finished segments kept in {workspace.root.name}. Re-run the same file to resume.")
 
 
 def process_video(input_path: Path):
-    """Refined processing pipeline with restart handling and robust piping."""
+    """Resumable processing pipeline: segment encode, mux, atomic rename, cleanup."""
     started_at = time.time()
 
     _set_runtime_log_level()
@@ -697,30 +784,33 @@ def process_video(input_path: Path):
     log_info(f"\n[JOB START] Processing: {input_path.name}")
     log_info("-" * 40)
 
-    work_dir, stem, output_file, temp_script, temp_output = _prepare_processing_paths(input_path)
+    work_dir, stem, output_file, workspace = _prepare_processing_paths(input_path)
     cleanup_temp_files(work_dir, stem)
-    existing_output_result = _get_existing_output_result(input_path, output_file, started_at, work_dir, stem)
+    existing_output_result = _get_existing_output_result(input_path, output_file, started_at, work_dir, stem, workspace)
     if existing_output_result is not None:
         return existing_output_result
 
-    duration_sec, ffmpeg_cmd, vspipe_cmd = _build_processing_commands(input_path, temp_script, temp_output)
-
-    log_debug(f"   [DEBUG] VSPIPE CMD: {vspipe_cmd}")
-    log_debug(f"   [DEBUG] FFMPEG CMD: {ffmpeg_cmd}")
+    prepare_workspace(workspace)
+    job = _build_processing_commands(input_path, workspace)
+    duration_sec = job["duration_sec"]
 
     log_info(f"   [INFO] Source Duration: ~{duration_sec / 60:.2f} mins")
     log_info(f">> Encoding to: {output_file.name}")
 
-    success = _run_encoding_pipeline(vspipe_cmd, ffmpeg_cmd, duration_sec)
-
-    rename_success = True
-    if success:
-        rename_success = _rename_completed_output(temp_output, output_file)
-        if rename_success:
-            _finalize_encoding_success(temp_script, _format_total_timestamp(duration_sec))
+    encoded = _run_resumable_encode(job, workspace, input_path, output_file)
+    completed = _complete_output(workspace, output_file, duration_sec, encoded)
 
     cleanup_temp_files(work_dir, stem)
-    return _finalize_processing_result(input_path, output_file, started_at, duration_sec, success, rename_success)
+    return _finalize_processing_result(input_path, output_file, started_at, duration_sec, completed)
+
+
+def _complete_output(workspace: VideoWorkspace, output_file: Path, duration_sec: float, encoded: bool) -> bool:
+    """Move the muxed part file into place; on any failure keep the workspace for resume."""
+    if encoded and _rename_completed_output(workspace.output_part, output_file):
+        _finalize_encoding_success(workspace, _format_total_timestamp(duration_sec))
+        return True
+    _log_resume_hint(workspace)
+    return False
 
 
 def _set_runtime_log_level():
@@ -856,6 +946,7 @@ def _log_batch_summary(input_files: list[Path], results: list[dict], batch_start
 def _run_preflight():
     """Initialize the runtime environment and print the startup banner."""
     setup_environment()
+    cleanup_legacy_cache_dir()
     cpu = get_cpu_name()
     gpu = get_gpu_name()
     _show_banner(cpu, gpu, PERF_PROFILE, DEINTERLACE_MODE, ENCODER, HW_SETTINGS)

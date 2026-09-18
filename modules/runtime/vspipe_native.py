@@ -156,14 +156,62 @@ def _write_raw_output(clip):
         _exit_write_error(error)
 
 
-def _parse_cli_args(args):
-    """Parse module CLI arguments into script path and raw mode."""
-    raw_mode = "--raw" in args
-    script_args = [arg for arg in args if arg != "--raw"]
-    if not script_args:
-        sys.stderr.write("Usage: python -m modules.runtime.vspipe_native script.vpy [--raw]\n")
+def _pop_int_option(args, name):
+    """Remove ``name VALUE`` from args in place and return VALUE as an int."""
+    if name not in args:
+        return None
+    index = args.index(name)
+    try:
+        value = int(args[index + 1])
+    except (IndexError, ValueError):
+        sys.stderr.write(f"Error: {name} requires an integer frame number\n")
         sys.exit(1)
-    return script_args[0], raw_mode
+    args.pop(index)
+    args.pop(index)
+    return value
+
+
+def _parse_cli_args(args):
+    """Parse CLI arguments into script path, raw mode, and optional frame range."""
+    remaining = list(args)
+    start = _pop_int_option(remaining, "--start")
+    end = _pop_int_option(remaining, "--end")
+    raw_mode = "--raw" in remaining
+    script_args = [arg for arg in remaining if arg != "--raw"]
+    if not script_args:
+        sys.stderr.write("Usage: python -m modules.runtime.vspipe_native script.vpy [--raw] [--start N] [--end N]\n")
+        sys.exit(1)
+    return script_args[0], raw_mode, start, end
+
+
+def _exit_invalid_range(message):
+    """Report an unusable frame range and terminate like the other CLI errors."""
+    sys.stderr.write(f"Error: {message}\n")
+    sys.exit(1)
+
+
+def _validate_frame_range(begin, end):
+    """Reject ranges vspipe itself refuses.
+
+    A negative bound would silently slice from the end of the clip under
+    Python semantics, and ``end < start`` would silently produce an empty
+    clip; both would corrupt a segment rather than fail the job.
+    """
+    last = begin if end is None else end
+    if min(begin, last) < 0:
+        _exit_invalid_range("--start and --end must not be negative")
+    if last < begin:
+        _exit_invalid_range(f"--end ({end}) must not be smaller than --start ({begin})")
+
+
+def _slice_clip(clip, start, end):
+    """Trim the clip to the inclusive ``start``..``end`` frame range like vspipe."""
+    if start is None and end is None:
+        return clip
+    begin = start or 0
+    _validate_frame_range(begin, end)
+    stop = end + 1 if end is not None else None
+    return clip[begin:stop]
 
 
 def _ensure_script_exists(script_path):
@@ -215,10 +263,10 @@ def _build_y4m_header(clip, colorspace):
 
 def main():
     """Execute a VPY script and stream the first output clip to stdout."""
-    script_path, raw_mode = _parse_cli_args(sys.argv[1:])
+    script_path, raw_mode, start, end = _parse_cli_args(sys.argv[1:])
     _ensure_script_exists(script_path)
     _run_vpy_script(script_path)
-    clip = _resolve_output_clip()
+    clip = _slice_clip(_resolve_output_clip(), start, end)
 
     sys.stderr.write(f"Output Info: {clip.width}x{clip.height} {clip.format.name} {clip.num_frames} frames\n")
     sys.stderr.flush()

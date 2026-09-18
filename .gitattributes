@@ -1,1 +1,4 @@
 *.bat text eol=crlf
+# POSIX shell scripts must keep LF on every platform: a CRLF checkout on Windows
+# breaks their shebang ("bash<CR>") inside the Docker/VM test harnesses.
+*.sh text eol=lf
