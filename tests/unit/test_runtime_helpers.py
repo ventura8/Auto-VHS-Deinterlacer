@@ -746,7 +746,7 @@ def test_install_linux_ffmpeg_rejects_digest_mismatch(tmp_path):
     assert result.stdout.count("Deleted corrupt archive") == 3
     assert (len(urls), "FF_OK=0" in result.stdout, (ff_tmp / "ff.tar.xz").exists(), _installed_names(bin_dir)) == (3, True, False, set())
     # The tampered payload never got extracted into the temp dir either.
-    assert [p for p in ff_tmp.rglob("ffmpeg")] == []
+    assert not any(ff_tmp.rglob("ffmpeg"))
 
 
 @_needs_bash
