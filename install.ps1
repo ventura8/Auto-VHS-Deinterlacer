@@ -329,8 +329,8 @@ if ($env:AVD_SKIP_FFMPEG -eq "1") {
 }
 elseif (-not (Test-Path $ffmpegDest)) {
     Write-Output "[INFO] FFmpeg not found in .venv. Downloading static build with integrity verification..."
-    $ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.1-essentials_build.zip"
-    $ffmpegExpectedSha256 = "FEC81AE03971D9DD4BE3EBE02E263BD2EC1D789483F931BDBA5F5715E65DA2E9"
+    $ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-essentials_build.zip"
+    $ffmpegExpectedSha256 = "60F467265B1E312373DBCD92200C2618A74850F98D3D078E94296BB3FA2047BA"
     $zipPath = Join-Path $PSScriptRoot "ffmpeg.zip"
     $extractPath = Join-Path $PSScriptRoot "ffmpeg_temp"
 

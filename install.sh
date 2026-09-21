@@ -459,7 +459,7 @@ fi
 # ------------------------------------------------------------------------------
 # 6c. Install a self-contained FFmpeg 9.0.x (parity with Windows install.ps1)
 # ------------------------------------------------------------------------------
-# install.ps1 drops a static FFmpeg 9.0.1 into the venv so the pipeline does not
+# install.ps1 drops a static FFmpeg 9.0.2 into the venv so the pipeline does not
 # depend on whatever the distro ships (Ubuntu 26.04 = 8.0.1). Do the same here:
 # fetch a static 9.0 build into .venv/bin, which the app puts first on PATH via
 # modules/core/utils.py:setup_environment. Set AVD_SKIP_FFMPEG=1 to skip.
@@ -481,9 +481,9 @@ ffmpeg_is_90() {
 # execute it against fixture archives with a stubbed curl.
 install_darwin_ffmpeg() {
     _ff_tmp="$1"
-    FF_VER="9.0.1"
-    FFMPEG_ZIP_EXPECTED_SHA256="8a8c9e549983409fe6604b9aa665648b7a5def9407fe814c39c8b2ea7f64a48f"
-    FFPROBE_ZIP_EXPECTED_SHA256="d13f35db03456b7f65b7edb6437c86e23810fbfe91795e571f5b77211343b4f1"
+    FF_VER="9.0.2"
+    FFMPEG_ZIP_EXPECTED_SHA256="4acc0be580f9b2788029eb7bd4d645ff87968911b0a62aeeb3940d42d54558d5"
+    FFPROBE_ZIP_EXPECTED_SHA256="24a9c968cd4da72d99c7245e914b921815835eb6dff01d99868031aebaf1d439"
     FF_GOT_ALL=1
     for tool in ffmpeg ffprobe; do
         case "$tool" in
@@ -542,30 +542,30 @@ else
             *)             FF_PLAT="" ;;
         esac
         if [ -n "$FF_PLAT" ]; then
-            FF_BASE="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"
-            FF_ASSET="ffmpeg-n${FFMPEG_SERIES}-latest-${FF_PLAT}-gpl-${FFMPEG_SERIES}.tar.xz"
+            # Pin a fixed BtbN autobuild tag and the SHA-256 of each archive here
+            # (same pattern as install_darwin_ffmpeg and install.ps1). The
+            # "latest" tag is a moving target, and its checksums.sha256 lives in
+            # the same release as the archives, so it cannot protect against a
+            # swapped release. Bump FF_TAG/FF_VER and both hashes together.
+            FF_TAG="autobuild-2026-09-19-13-11"
+            FF_VER="9.0.2"
+            case "$FF_PLAT" in
+                linux64)    FF_EXPECT="c67af56466837059601a1abd22109b7b771eeea137c9ff4b1db0bde66192dbc6" ;;
+                linuxarm64) FF_EXPECT="100182dfa879b37caa327b00f7020f04e2dd95c282e171efb92bff262259d463" ;;
+            esac
+            FF_BASE="https://github.com/BtbN/FFmpeg-Builds/releases/download/${FF_TAG}"
+            FF_ASSET="ffmpeg-n${FF_VER}-${FF_PLAT}-gpl-${FFMPEG_SERIES}.tar.xz"
             for attempt in 1 2 3; do
-                rm -f "$FF_TMP/ff.tar.xz" "$FF_TMP/checksums.sha256"
+                rm -f "$FF_TMP/ff.tar.xz"
                 if curl -fsSL "$FF_BASE/$FF_ASSET" -o "$FF_TMP/ff.tar.xz"; then
-                    if curl -fsSL "$FF_BASE/checksums.sha256" -o "$FF_TMP/checksums.sha256" 2>/dev/null \
-                       && [ -s "$FF_TMP/checksums.sha256" ]; then
-                        FF_EXPECT="$(awk -v asset="$FF_ASSET" '{file=$2; sub(/^\*/, "", file); if (file == asset) {print tolower($1); exit}}' "$FF_TMP/checksums.sha256")"
-                        FF_GOT="$(sha256_of "$FF_TMP/ff.tar.xz")"
-                        if [ -z "$FF_EXPECT" ]; then
-                            echo "[WARN] FFmpeg archive checksum entry is unavailable for $FF_ASSET."
-                        elif [ "$FF_EXPECT" != "$FF_GOT" ]; then
-                            echo "[WARN] FFmpeg archive SHA-256 mismatch on attempt $attempt (expected $FF_EXPECT, got $FF_GOT)."
-                            rm -f "$FF_TMP/ff.tar.xz"
-                            echo "       Deleted corrupt archive; retrying download..."
-                            continue
-                        else
-                            FF_OK=1
-                        fi
-                    else
-                        echo "[WARN] FFmpeg archive checksum is unavailable; refusing the unverified download."
-                        FF_OK=0
-                        break
+                    FF_GOT="$(sha256_of "$FF_TMP/ff.tar.xz")"
+                    if [ "$FF_EXPECT" != "$FF_GOT" ]; then
+                        echo "[WARN] FFmpeg archive SHA-256 mismatch on attempt $attempt (expected $FF_EXPECT, got $FF_GOT)."
+                        rm -f "$FF_TMP/ff.tar.xz"
+                        echo "       Deleted corrupt archive; retrying download..."
+                        continue
                     fi
+                    FF_OK=1
                 fi
                 if [ "$FF_OK" = 1 ]; then
                     if ! tar -xf "$FF_TMP/ff.tar.xz" -C "$FF_TMP"; then

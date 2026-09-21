@@ -377,10 +377,10 @@ def test_install_ps1_verifies_download_hashes():
     assert "$ffmpegExpectedSha256" in install_ps1_content
 
 
-# Trusted SHA-256 digests of the evermeet.cx FFmpeg 9.0.1 archives pinned by
+# Trusted SHA-256 digests of the evermeet.cx FFmpeg 9.0.2 archives pinned by
 # install.sh. Update these together with FF_VER when the bundled FFmpeg is bumped.
-FFMPEG_ZIP_SHA256 = "8a8c9e549983409fe6604b9aa665648b7a5def9407fe814c39c8b2ea7f64a48f"
-FFPROBE_ZIP_SHA256 = "d13f35db03456b7f65b7edb6437c86e23810fbfe91795e571f5b77211343b4f1"
+FFMPEG_ZIP_SHA256 = "4acc0be580f9b2788029eb7bd4d645ff87968911b0a62aeeb3940d42d54558d5"
+FFPROBE_ZIP_SHA256 = "24a9c968cd4da72d99c7245e914b921815835eb6dff01d99868031aebaf1d439"
 
 
 def _read_install_sh() -> str:
@@ -452,7 +452,7 @@ def _run_darwin_ffmpeg_install(tmp_path: Path, archives: dict[str, dict[str, byt
     mirror = tmp_path / "mirror"
     mirror.mkdir()
     for tool, members in archives.items():
-        _make_zip(mirror / f"{tool}-9.0.1.zip", members)
+        _make_zip(mirror / f"{tool}-9.0.2.zip", members)
     # curl -fsSL <url> -o <dest>  ->  copy the mirrored archive for that URL.
     # A shell function shadows the real curl whatever PATH the bash in use
     # builds for itself. A stub executable prepended to PATH did not survive
@@ -580,7 +580,7 @@ def test_install_darwin_ffmpeg_rejects_digest_mismatch(tmp_path):
 
     result, bin_dir, ff_tmp = _run_darwin_ffmpeg_install(tmp_path, archives, pin_overrides=pins)
 
-    expected_messages = ("ffprobe-9.0.1.zip SHA-256 mismatch", "Refusing to install the unverified archive")
+    expected_messages = ("ffprobe-9.0.2.zip SHA-256 mismatch", "Refusing to install the unverified archive")
     assert [msg for msg in expected_messages if msg not in result.stdout] == []
     # FF_OK stays 0, the rejected archive is deleted, and nothing reaches the venv.
     assert ("FF_OK=0" in result.stdout, (ff_tmp / "ffprobe.zip").exists(), _installed_names(bin_dir)) == (True, False, set())
