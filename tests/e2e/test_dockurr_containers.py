@@ -1,6 +1,7 @@
 """Tests validating Dockurr Docker and container configurations for Windows and macOS."""
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -110,15 +111,29 @@ def test_dockurr_oem_script():
     assert all(text in content for text in required_text)
 
 
+# (fragment, must_be_present) rules for docker/Dockerfile.ubuntu. Python 3.12
+# comes from uv's checksum-verified managed builds, with uv pinned by digest; the
+# image must not depend on Launchpad (deadsnakes PPA), whose outages repeatedly
+# broke the build before any project code ran.
+UBUNTU_DOCKERFILE_RULES = (
+    ("FROM ubuntu:26.04", True),
+    (".venv/bin/pip install vapoursynth==79", True),
+    ('ENV PATH="/workspace/.venv/bin:${PATH}"', True),
+    ("uv python install 3.12", True),
+    ("add-apt-repository", False),
+    ("deadsnakes/ppa", False),
+)
+UV_PINNED_COPY = re.compile(r"COPY --from=ghcr\.io/astral-sh/uv:\d+\.\d+\.\d+@sha256:[0-9a-f]{64} /uv ")
+
+
 @pytest.mark.docker
 def test_ubuntu_dockerfile_version():
-    """Verify Ubuntu Dockerfile uses ubuntu:26.04 base image."""
+    """Verify the Ubuntu Dockerfile's base image, pinned tooling and Launchpad independence."""
     dockerfile = REPO_ROOT / "docker" / "Dockerfile.ubuntu"
     assert dockerfile.exists(), "docker/Dockerfile.ubuntu must exist"
     content = dockerfile.read_text(encoding="utf-8")
-    assert "FROM ubuntu:26.04" in content
-    assert ".venv/bin/pip install vapoursynth==79" in content
-    assert 'ENV PATH="/workspace/.venv/bin:${PATH}"' in content
+    violations = [fragment for fragment, present in UBUNTU_DOCKERFILE_RULES if (fragment in content) != present]
+    assert (violations, bool(UV_PINNED_COPY.search(content))) == ([], True)
     _assert_docker_ignore()
 
 
