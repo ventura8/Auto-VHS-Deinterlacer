@@ -416,31 +416,31 @@ def test_install_sh_verifies_download_hashes():
     darwin_fn = _extract_shell_function(install_sh_content, "install_darwin_ffmpeg")
     linux_fn = _extract_shell_function(install_sh_content, "install_linux_ffmpeg")
 
-    # (haystack, required fragment) pairs; each platform branch of the installer
-    # must route through its verified function, which must pin the digest in the
-    # script, hash the download, and delete-on-mismatch. The Linux function must
-    # pin a fixed release tag rather than BtbN's moving "latest" (whose
+    # (haystack, fragment, must_be_present) triples; each platform branch of the
+    # installer must route through its verified function, which must pin the
+    # digest in the script, hash the download, and delete-on-mismatch. The Darwin
+    # branch must never fall back to an unguarded extractall(). The Linux function
+    # must pin a fixed release tag rather than BtbN's moving "latest" (whose
     # checksums.sha256 lives in the same release and so proves nothing).
-    required = (
-        (install_sh_content, "HAVSFUNC_EXPECTED_SHA256"),
-        (install_sh_content, f'FFMPEG_ZIP_EXPECTED_SHA256="{FFMPEG_ZIP_SHA256}"'),
-        (install_sh_content, f'FFPROBE_ZIP_EXPECTED_SHA256="{FFPROBE_ZIP_SHA256}"'),
-        (install_sh_content, 'install_darwin_ffmpeg "$FF_TMP"'),
-        (install_sh_content, 'install_linux_ffmpeg "$FF_TMP" "$(uname -m)"'),
-        (darwin_fn, 'sha256_of "$_ff_tmp/${tool}.zip"'),
-        (darwin_fn, 'rm -f "$_ff_tmp/${tool}.zip"'),
-        (linux_fn, f'FF_EXPECT="{LINUX_TAR_SHA256["linux64"]}"'),
-        (linux_fn, f'FF_EXPECT="{LINUX_TAR_SHA256["linuxarm64"]}"'),
-        (linux_fn, 'FF_TAG="autobuild-'),
-        (linux_fn, 'sha256_of "$_ff_tmp/ff.tar.xz"'),
-        (linux_fn, 'rm -f "$_ff_tmp/ff.tar.xz"'),
+    rules = (
+        (install_sh_content, "HAVSFUNC_EXPECTED_SHA256", True),
+        (install_sh_content, f'FFMPEG_ZIP_EXPECTED_SHA256="{FFMPEG_ZIP_SHA256}"', True),
+        (install_sh_content, f'FFPROBE_ZIP_EXPECTED_SHA256="{FFPROBE_ZIP_SHA256}"', True),
+        (install_sh_content, 'install_darwin_ffmpeg "$FF_TMP"', True),
+        (install_sh_content, 'install_linux_ffmpeg "$FF_TMP" "$(uname -m)"', True),
+        (install_sh_content, "extractall", False),
+        (darwin_fn, 'sha256_of "$_ff_tmp/${tool}.zip"', True),
+        (darwin_fn, 'rm -f "$_ff_tmp/${tool}.zip"', True),
+        (linux_fn, f'FF_EXPECT="{LINUX_TAR_SHA256["linux64"]}"', True),
+        (linux_fn, f'FF_EXPECT="{LINUX_TAR_SHA256["linuxarm64"]}"', True),
+        (linux_fn, 'FF_TAG="autobuild-', True),
+        (linux_fn, 'sha256_of "$_ff_tmp/ff.tar.xz"', True),
+        (linux_fn, 'rm -f "$_ff_tmp/ff.tar.xz"', True),
+        (linux_fn, "releases/download/latest", False),
+        (linux_fn, "checksums.sha256", False),
     )
-    missing = [fragment for haystack, fragment in required if fragment not in haystack]
-    assert missing == []
-    # The Darwin branch must never fall back to an unguarded extractall().
-    assert "extractall" not in install_sh_content
-    # The Linux branch must not trust the moving tag or a co-hosted checksum file.
-    assert [frag for frag in ("releases/download/latest", "checksums.sha256") if frag in linux_fn] == []
+    violations = [fragment for haystack, fragment, present in rules if (fragment in haystack) != present]
+    assert violations == []
 
 
 def _make_zip(path: Path, members: dict[str, bytes]) -> str:
@@ -664,6 +664,14 @@ _LINUX_TAR_MEMBERS = {
 }
 
 
+def _override_linux_pin(fn_text: str, machine: str, digest: str) -> str:
+    """Substitute the pinned digest for ``machine``'s BtbN platform in the extracted function text."""
+    plat = {"x86_64": "linux64", "aarch64": "linuxarm64"}[machine]
+    fn_text, count = re.subn(rf'(FF_PLAT="{plat}"\n\s+FF_EXPECT=)"[0-9a-f]{{64}}"', rf'\1"{digest}"', fn_text)
+    assert count == 1, plat
+    return fn_text
+
+
 def _run_linux_ffmpeg_install(tmp_path: Path, machine: str, members: dict[str, bytes] | None, *, pin_override: str | None):
     """Execute install.sh's install_linux_ffmpeg() against a fixture archive with a stubbed curl.
 
@@ -675,11 +683,8 @@ def _run_linux_ffmpeg_install(tmp_path: Path, machine: str, members: dict[str, b
     """
     script = _read_install_sh()
     fn_text = _extract_shell_function(script, "install_linux_ffmpeg")
-    plat = {"x86_64": "linux64", "aarch64": "linuxarm64"}.get(machine)
     if pin_override is not None:
-        assert plat, machine
-        fn_text, count = re.subn(rf'(FF_PLAT="{plat}"\n\s+FF_EXPECT=)"[0-9a-f]{{64}}"', rf'\1"{pin_override}"', fn_text)
-        assert count == 1, plat
+        fn_text = _override_linux_pin(fn_text, machine, pin_override)
     sha_fn = _extract_shell_function(script, "sha256_of")
 
     mirror = tmp_path / "mirror"
