@@ -405,6 +405,13 @@ else {
     }
     catch {
         Write-Output "[WARNING] Failed to auto-install FFmpeg: $_"
+        # Drop any stale or half-copied bundle: setup_environment() puts
+        # .venv\Scripts first on PATH, so leaving an old ffmpeg.exe/ffprobe.exe
+        # here would silently keep running the previous version instead of
+        # falling back to the system FFmpeg (parity with install.sh).
+        foreach ($stale in @($ffmpegDest, $ffprobeDest)) {
+            if (Test-Path $stale) { Remove-Item $stale -Force -ErrorAction SilentlyContinue }
+        }
         Write-Output "The app will rely on system-wide FFmpeg instead."
     }
     finally {
