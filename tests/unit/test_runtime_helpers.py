@@ -383,9 +383,10 @@ def test_install_ps1_verifies_download_hashes():
 # install.sh. Update these together with FF_VER when the bundled FFmpeg is bumped.
 FFMPEG_ZIP_SHA256 = "4acc0be580f9b2788029eb7bd4d645ff87968911b0a62aeeb3940d42d54558d5"
 FFPROBE_ZIP_SHA256 = "24a9c968cd4da72d99c7245e914b921815835eb6dff01d99868031aebaf1d439"
-# Trusted SHA-256 digests of the BtbN FFmpeg-Builds 9.0.2 Linux archives
-# (autobuild-2026-09-19-13-11) pinned by install_linux_ffmpeg(), keyed by the
-# BtbN platform suffix. Update these together with FF_TAG/FF_VER on a bump.
+# Fixed BtbN FFmpeg-Builds release tag and the trusted SHA-256 digests of its
+# 9.0.2 Linux archives pinned by install_linux_ffmpeg(), keyed by the BtbN
+# platform suffix. Update these together with FF_TAG/FF_VER on a bump.
+LINUX_FFMPEG_TAG = "autobuild-2026-09-19-13-11"
 LINUX_TAR_SHA256 = {
     "linux64": "c67af56466837059601a1abd22109b7b771eeea137c9ff4b1db0bde66192dbc6",
     "linuxarm64": "100182dfa879b37caa327b00f7020f04e2dd95c282e171efb92bff262259d463",
@@ -433,7 +434,7 @@ def test_install_sh_verifies_download_hashes():
         (darwin_fn, 'rm -f "$_ff_tmp/${tool}.zip"', True),
         (linux_fn, f'FF_EXPECT="{LINUX_TAR_SHA256["linux64"]}"', True),
         (linux_fn, f'FF_EXPECT="{LINUX_TAR_SHA256["linuxarm64"]}"', True),
-        (linux_fn, 'FF_TAG="autobuild-', True),
+        (linux_fn, f'FF_TAG="{LINUX_FFMPEG_TAG}"', True),
         (linux_fn, 'sha256_of "$_ff_tmp/ff.tar.xz"', True),
         (linux_fn, 'rm -f "$_ff_tmp/ff.tar.xz"', True),
         (linux_fn, "releases/download/latest", False),
@@ -658,10 +659,13 @@ def _make_tar_xz(path: Path, members: dict[str, bytes]) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-_LINUX_TAR_MEMBERS = {
-    "ffmpeg-n9.0.2-linux64-gpl-9.0/bin/ffmpeg": _FFMPEG_STUB,
-    "ffmpeg-n9.0.2-linux64-gpl-9.0/bin/ffprobe": _FFPROBE_STUB,
-}
+def _linux_tar_members(plat: str) -> dict[str, bytes]:
+    """Members of a BtbN-style archive for ``plat``: ``ffmpeg-n9.0.2-<plat>-gpl-9.0/bin/{ffmpeg,ffprobe}``."""
+    root = f"ffmpeg-n9.0.2-{plat}-gpl-9.0/bin"
+    return {f"{root}/ffmpeg": _FFMPEG_STUB, f"{root}/ffprobe": _FFPROBE_STUB}
+
+
+_LINUX_TAR_MEMBERS = _linux_tar_members("linux64")
 
 
 def _override_linux_pin(fn_text: str, machine: str, digest: str) -> str:
@@ -725,18 +729,17 @@ def _run_linux_ffmpeg_install(tmp_path: Path, machine: str, members: dict[str, b
 )
 def test_install_linux_ffmpeg_accepts_matching_archive(tmp_path, machine, plat):
     """A genuine archive (digest matches the pin for this arch) is fetched from the fixed tag and installed."""
-    pin = _make_tar_xz(tmp_path / "probe.tar.xz", _LINUX_TAR_MEMBERS)
+    members = _linux_tar_members(plat)
+    pin = _make_tar_xz(tmp_path / "probe.tar.xz", members)
 
-    result, bin_dir, _, urls = _run_linux_ffmpeg_install(tmp_path, machine, _LINUX_TAR_MEMBERS, pin_override=pin)
+    result, bin_dir, _, urls = _run_linux_ffmpeg_install(tmp_path, machine, members, pin_override=pin)
 
     assert (result.returncode, "FF_OK=1" in result.stdout) == (0, True), result.stderr
     installed = {name: ((bin_dir / name).read_bytes(), os.access(bin_dir / name, os.X_OK)) for name in _installed_names(bin_dir)}
     assert installed == {"ffmpeg": (_FFMPEG_STUB, True), "ffprobe": (_FFPROBE_STUB, True)}
     # Exactly one download, from a fixed autobuild tag, for this arch's asset.
-    assert len(urls) == 1 and re.fullmatch(
-        rf"https://github\.com/BtbN/FFmpeg-Builds/releases/download/autobuild-[0-9-]+/ffmpeg-n9\.0\.2-{plat}-gpl-9\.0\.tar\.xz",
-        urls[0],
-    ), urls
+    expected_url = f"https://github.com/BtbN/FFmpeg-Builds/releases/download/{LINUX_FFMPEG_TAG}/ffmpeg-n9.0.2-{plat}-gpl-9.0.tar.xz"
+    assert urls == [expected_url]
 
 
 @_needs_bash

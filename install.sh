@@ -532,9 +532,15 @@ with zipfile.ZipFile(zip_path) as zf:
 PYEOF
     done
     if [ "$FF_GOT_ALL" = 1 ] && [ -f "$_ff_tmp/ffmpeg" ] && [ -f "$_ff_tmp/ffprobe" ]; then
-        cp "$_ff_tmp/ffmpeg" "$_ff_tmp/ffprobe" "$VENV_DIR/bin/"
-        chmod +x "$VENV_DIR/bin/ffmpeg" "$VENV_DIR/bin/ffprobe"
-        FF_OK=1
+        # Stage as one conditional so a cp/chmod failure does not abort the
+        # installer under set -e; FF_OK stays 0 and the caller removes any
+        # partial copy.
+        if cp "$_ff_tmp/ffmpeg" "$_ff_tmp/ffprobe" "$VENV_DIR/bin/" \
+           && chmod +x "$VENV_DIR/bin/ffmpeg" "$VENV_DIR/bin/ffprobe"; then
+            FF_OK=1
+        else
+            echo "[WARN] Could not stage the FFmpeg binaries into $VENV_DIR/bin."
+        fi
     fi
 }
 
@@ -581,13 +587,20 @@ install_linux_ffmpeg() {
             continue
         fi
         FF_BIN="$(find "$_ff_tmp" -type d -name bin | head -n1)"
-        if [ -n "$FF_BIN" ] && [ -f "$FF_BIN/ffmpeg" ] && [ -f "$FF_BIN/ffprobe" ]; then
-            cp "$FF_BIN/ffmpeg" "$FF_BIN/ffprobe" "$VENV_DIR/bin/"
-            chmod +x "$VENV_DIR/bin/ffmpeg" "$VENV_DIR/bin/ffprobe"
+        if [ -z "$FF_BIN" ] || [ ! -f "$FF_BIN/ffmpeg" ] || [ ! -f "$FF_BIN/ffprobe" ]; then
+            echo "[WARN] FFmpeg archive did not contain bin/ffmpeg and bin/ffprobe on attempt $attempt."
+            continue
+        fi
+        # Stage as one conditional so a cp/chmod failure (disk full, permissions)
+        # does not abort the installer under set -e; FF_OK stays 0 and the caller
+        # removes any partial copy.
+        if cp "$FF_BIN/ffmpeg" "$FF_BIN/ffprobe" "$VENV_DIR/bin/" \
+           && chmod +x "$VENV_DIR/bin/ffmpeg" "$VENV_DIR/bin/ffprobe"; then
             FF_OK=1
             return 0
         fi
-        echo "[WARN] FFmpeg archive did not contain bin/ffmpeg and bin/ffprobe on attempt $attempt."
+        echo "[WARN] Could not stage the FFmpeg binaries into $VENV_DIR/bin."
+        return 0
     done
 }
 
