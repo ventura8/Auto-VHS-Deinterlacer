@@ -464,11 +464,22 @@ fi
 # fetch a static 9.0 build into .venv/bin, which the app puts first on PATH via
 # modules/core/utils.py:setup_environment. Set AVD_SKIP_FFMPEG=1 to skip.
 FFMPEG_SERIES="9.0"
+# Exact patch release pinned below (evermeet FF_VER, BtbN FF_VER and the SHA-256
+# values). A .venv binary is only kept when it reports this exact version, so a
+# bump here replaces an older 9.0.x that a previous install left behind.
+FFMPEG_VERSION="9.0.2"
 
-ffmpeg_is_90() {
+# True when the binary reports exactly $FFMPEG_VERSION. Matches
+# "version 9.0.2 ..." (evermeet), "version n9.0.2-20260919 ..." (BtbN) and
+# "version 9.0.2-essentials_build ..." (gyan) but not 9.0.1 or 9.0.21.
+ffmpeg_is_pinned() {
     [ -x "$1" ] || return 1
     _ffv="$("$1" -version 2>/dev/null | head -n1 || true)"
-    case "$_ffv" in *"version n9.0"*|*"version 9.0"*) return 0 ;; *) return 1 ;; esac
+    case "$_ffv" in
+        *"version n${FFMPEG_VERSION} "*|*"version n${FFMPEG_VERSION}-"*|\
+        *"version ${FFMPEG_VERSION} "*|*"version ${FFMPEG_VERSION}-"*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # Download, verify and stage the evermeet.cx macOS FFmpeg/FFprobe builds.
@@ -481,6 +492,8 @@ ffmpeg_is_90() {
 # execute it against fixture archives with a stubbed curl.
 install_darwin_ffmpeg() {
     _ff_tmp="$1"
+    # Kept literal (not $FFMPEG_VERSION) so the function stays self-contained
+    # for the unit tests; keep it equal to FFMPEG_VERSION above.
     FF_VER="9.0.2"
     FFMPEG_ZIP_EXPECTED_SHA256="4acc0be580f9b2788029eb7bd4d645ff87968911b0a62aeeb3940d42d54558d5"
     FFPROBE_ZIP_EXPECTED_SHA256="24a9c968cd4da72d99c7245e914b921815835eb6dff01d99868031aebaf1d439"
@@ -527,10 +540,10 @@ PYEOF
 
 if [ "${AVD_SKIP_FFMPEG:-0}" = "1" ]; then
     echo "[INFO] AVD_SKIP_FFMPEG=1 set; skipping bundled FFmpeg."
-elif ffmpeg_is_90 "$VENV_DIR/bin/ffmpeg" && ffmpeg_is_90 "$VENV_DIR/bin/ffprobe"; then
-    echo "[INFO] Local FFmpeg $FFMPEG_SERIES already present in .venv."
+elif ffmpeg_is_pinned "$VENV_DIR/bin/ffmpeg" && ffmpeg_is_pinned "$VENV_DIR/bin/ffprobe"; then
+    echo "[INFO] Local FFmpeg $FFMPEG_VERSION already present in .venv."
 else
-    echo "[INFO] Installing self-contained FFmpeg $FFMPEG_SERIES into .venv/bin..."
+    echo "[INFO] Installing self-contained FFmpeg $FFMPEG_VERSION into .venv/bin..."
     FF_TMP="$(mktemp -d)"
     FF_OK=0
     if [ "$OS_TYPE" = "Darwin" ]; then
@@ -546,9 +559,9 @@ else
             # (same pattern as install_darwin_ffmpeg and install.ps1). The
             # "latest" tag is a moving target, and its checksums.sha256 lives in
             # the same release as the archives, so it cannot protect against a
-            # swapped release. Bump FF_TAG/FF_VER and both hashes together.
+            # swapped release. Bump FF_TAG, FFMPEG_VERSION and both hashes together.
             FF_TAG="autobuild-2026-09-19-13-11"
-            FF_VER="9.0.2"
+            FF_VER="$FFMPEG_VERSION"
             case "$FF_PLAT" in
                 linux64)    FF_EXPECT="c67af56466837059601a1abd22109b7b771eeea137c9ff4b1db0bde66192dbc6" ;;
                 linuxarm64) FF_EXPECT="100182dfa879b37caa327b00f7020f04e2dd95c282e171efb92bff262259d463" ;;
@@ -595,12 +608,12 @@ else
         fi
     fi
     rm -rf "$FF_TMP"
-    if ffmpeg_is_90 "$VENV_DIR/bin/ffmpeg"; then
+    if ffmpeg_is_pinned "$VENV_DIR/bin/ffmpeg" && ffmpeg_is_pinned "$VENV_DIR/bin/ffprobe"; then
         echo "   -> $("$VENV_DIR/bin/ffmpeg" -version | head -n1)"
     else
         rm -f "$VENV_DIR/bin/ffmpeg" "$VENV_DIR/bin/ffprobe"
-        echo "[WARN] Could not install bundled FFmpeg $FFMPEG_SERIES; the pipeline will"
-        echo "       fall back to system FFmpeg. Install FFmpeg 9.0 manually for parity."
+        echo "[WARN] Could not install bundled FFmpeg $FFMPEG_VERSION; the pipeline will"
+        echo "       fall back to system FFmpeg. Install FFmpeg $FFMPEG_VERSION manually for parity."
     fi
 fi
 

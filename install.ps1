@@ -324,12 +324,32 @@ Write-Output "=================================================="
 # 5. Install Local FFmpeg (Self-Contained)
 # ==============================================================================
 $ffmpegDest = "$venvPath\Scripts\ffmpeg.exe"
+$ffprobeDest = "$venvPath\Scripts\ffprobe.exe"
+# Exact patch release pinned in $ffmpegUrl / $ffmpegExpectedSha256 below. A .venv
+# binary is only kept when it reports this exact version, so a bump here
+# replaces an older 9.0.x that a previous install left behind.
+$ffmpegVersion = "9.0.2"
+
+# True when the binary exists and its first "-version" line reports exactly
+# $ffmpegVersion (e.g. "ffmpeg version 9.0.2-essentials_build-www.gyan.dev ...").
+function Test-FfmpegPinned([string]$exe) {
+    if (-not (Test-Path $exe)) { return $false }
+    try {
+        $line = (& $exe -version 2>$null | Select-Object -First 1)
+    }
+    catch { return $false }
+    return [bool]($line -match ("version n?" + [regex]::Escape($ffmpegVersion) + "(\s|-)"))
+}
+
 if ($env:AVD_SKIP_FFMPEG -eq "1") {
     Write-Output "[INFO] AVD_SKIP_FFMPEG=1 set; using system FFmpeg."
 }
-elseif (-not (Test-Path $ffmpegDest)) {
-    Write-Output "[INFO] FFmpeg not found in .venv. Downloading static build with integrity verification..."
-    $ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-essentials_build.zip"
+elseif ((Test-FfmpegPinned $ffmpegDest) -and (Test-FfmpegPinned $ffprobeDest)) {
+    Write-Output "[INFO] Local FFmpeg $ffmpegVersion already present in .venv."
+}
+else {
+    Write-Output "[INFO] FFmpeg $ffmpegVersion not found in .venv. Downloading static build with integrity verification..."
+    $ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-$ffmpegVersion-essentials_build.zip"
     $ffmpegExpectedSha256 = "60F467265B1E312373DBCD92200C2618A74850F98D3D078E94296BB3FA2047BA"
     $zipPath = Join-Path $PSScriptRoot "ffmpeg.zip"
     $extractPath = Join-Path $PSScriptRoot "ffmpeg_temp"
@@ -391,9 +411,6 @@ elseif (-not (Test-Path $ffmpegDest)) {
         if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
         if (Test-Path $extractPath) { Remove-Item $extractPath -Recurse -Force }
     }
-}
-else {
-    Write-Output "[INFO] Local FFmpeg already installed."
 }
 
 Write-Output ""
