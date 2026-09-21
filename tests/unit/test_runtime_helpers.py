@@ -2,6 +2,7 @@
 
 import hashlib
 import importlib
+import io
 import os
 import re
 import runpy
@@ -9,6 +10,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tarfile
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -377,10 +379,18 @@ def test_install_ps1_verifies_download_hashes():
     assert "$ffmpegExpectedSha256" in install_ps1_content
 
 
-# Trusted SHA-256 digests of the evermeet.cx FFmpeg 9.0.1 archives pinned by
+# Trusted SHA-256 digests of the evermeet.cx FFmpeg 9.0.2 archives pinned by
 # install.sh. Update these together with FF_VER when the bundled FFmpeg is bumped.
-FFMPEG_ZIP_SHA256 = "8a8c9e549983409fe6604b9aa665648b7a5def9407fe814c39c8b2ea7f64a48f"
-FFPROBE_ZIP_SHA256 = "d13f35db03456b7f65b7edb6437c86e23810fbfe91795e571f5b77211343b4f1"
+FFMPEG_ZIP_SHA256 = "4acc0be580f9b2788029eb7bd4d645ff87968911b0a62aeeb3940d42d54558d5"
+FFPROBE_ZIP_SHA256 = "24a9c968cd4da72d99c7245e914b921815835eb6dff01d99868031aebaf1d439"
+# Fixed BtbN FFmpeg-Builds release tag and the trusted SHA-256 digests of its
+# 9.0.2 Linux archives pinned by install_linux_ffmpeg(), keyed by the BtbN
+# platform suffix. Update these together with FF_TAG/FF_VER on a bump.
+LINUX_FFMPEG_TAG = "autobuild-2026-09-19-13-11"
+LINUX_TAR_SHA256 = {
+    "linux64": "c67af56466837059601a1abd22109b7b771eeea137c9ff4b1db0bde66192dbc6",
+    "linuxarm64": "100182dfa879b37caa327b00f7020f04e2dd95c282e171efb92bff262259d463",
+}
 
 
 def _read_install_sh() -> str:
@@ -405,21 +415,33 @@ def test_install_sh_verifies_download_hashes():
     """
     install_sh_content = _read_install_sh()
     darwin_fn = _extract_shell_function(install_sh_content, "install_darwin_ffmpeg")
+    linux_fn = _extract_shell_function(install_sh_content, "install_linux_ffmpeg")
 
-    # (haystack, required fragment) pairs; the Darwin branch of the installer must
-    # route through the verified function, which must hash and delete-on-mismatch.
-    required = (
-        (install_sh_content, "HAVSFUNC_EXPECTED_SHA256"),
-        (install_sh_content, f'FFMPEG_ZIP_EXPECTED_SHA256="{FFMPEG_ZIP_SHA256}"'),
-        (install_sh_content, f'FFPROBE_ZIP_EXPECTED_SHA256="{FFPROBE_ZIP_SHA256}"'),
-        (install_sh_content, 'install_darwin_ffmpeg "$FF_TMP"'),
-        (darwin_fn, 'sha256_of "$_ff_tmp/${tool}.zip"'),
-        (darwin_fn, 'rm -f "$_ff_tmp/${tool}.zip"'),
+    # (haystack, fragment, must_be_present) triples; each platform branch of the
+    # installer must route through its verified function, which must pin the
+    # digest in the script, hash the download, and delete-on-mismatch. The Darwin
+    # branch must never fall back to an unguarded extractall(). The Linux function
+    # must pin a fixed release tag rather than BtbN's moving "latest" (whose
+    # checksums.sha256 lives in the same release and so proves nothing).
+    rules = (
+        (install_sh_content, "HAVSFUNC_EXPECTED_SHA256", True),
+        (install_sh_content, f'FFMPEG_ZIP_EXPECTED_SHA256="{FFMPEG_ZIP_SHA256}"', True),
+        (install_sh_content, f'FFPROBE_ZIP_EXPECTED_SHA256="{FFPROBE_ZIP_SHA256}"', True),
+        (install_sh_content, 'install_darwin_ffmpeg "$FF_TMP"', True),
+        (install_sh_content, 'install_linux_ffmpeg "$FF_TMP" "$(uname -m)"', True),
+        (install_sh_content, "extractall", False),
+        (darwin_fn, 'sha256_of "$_ff_tmp/${tool}.zip"', True),
+        (darwin_fn, 'rm -f "$_ff_tmp/${tool}.zip"', True),
+        (linux_fn, f'FF_EXPECT="{LINUX_TAR_SHA256["linux64"]}"', True),
+        (linux_fn, f'FF_EXPECT="{LINUX_TAR_SHA256["linuxarm64"]}"', True),
+        (linux_fn, f'FF_TAG="{LINUX_FFMPEG_TAG}"', True),
+        (linux_fn, 'sha256_of "$_ff_tmp/ff.tar.xz"', True),
+        (linux_fn, 'rm -f "$_ff_tmp/ff.tar.xz"', True),
+        (linux_fn, "releases/download/latest", False),
+        (linux_fn, "checksums.sha256", False),
     )
-    missing = [fragment for haystack, fragment in required if fragment not in haystack]
-    assert missing == []
-    # The Darwin branch must never fall back to an unguarded extractall().
-    assert "extractall" not in install_sh_content
+    violations = [fragment for haystack, fragment, present in rules if (fragment in haystack) != present]
+    assert violations == []
 
 
 def _make_zip(path: Path, members: dict[str, bytes]) -> str:
@@ -452,7 +474,7 @@ def _run_darwin_ffmpeg_install(tmp_path: Path, archives: dict[str, dict[str, byt
     mirror = tmp_path / "mirror"
     mirror.mkdir()
     for tool, members in archives.items():
-        _make_zip(mirror / f"{tool}-9.0.1.zip", members)
+        _make_zip(mirror / f"{tool}-9.0.2.zip", members)
     # curl -fsSL <url> -o <dest>  ->  copy the mirrored archive for that URL.
     # A shell function shadows the real curl whatever PATH the bash in use
     # builds for itself. A stub executable prepended to PATH did not survive
@@ -580,7 +602,7 @@ def test_install_darwin_ffmpeg_rejects_digest_mismatch(tmp_path):
 
     result, bin_dir, ff_tmp = _run_darwin_ffmpeg_install(tmp_path, archives, pin_overrides=pins)
 
-    expected_messages = ("ffprobe-9.0.1.zip SHA-256 mismatch", "Refusing to install the unverified archive")
+    expected_messages = ("ffprobe-9.0.2.zip SHA-256 mismatch", "Refusing to install the unverified archive")
     assert [msg for msg in expected_messages if msg not in result.stdout] == []
     # FF_OK stays 0, the rejected archive is deleted, and nothing reaches the venv.
     assert ("FF_OK=0" in result.stdout, (ff_tmp / "ffprobe.zip").exists(), _installed_names(bin_dir)) == (True, False, set())
@@ -624,6 +646,131 @@ def test_install_darwin_ffmpeg_handles_download_failure(tmp_path):
     result, bin_dir, _ = _run_darwin_ffmpeg_install(tmp_path, archives, pin_overrides=pins)
 
     assert ("FF_OK=0" in result.stdout, _installed_names(bin_dir)) == (True, set())
+
+
+def _make_tar_xz(path: Path, members: dict[str, bytes]) -> str:
+    """Write a .tar.xz with the given members and return its SHA-256 hex digest."""
+    with tarfile.open(path, "w:xz") as tf:
+        for name, data in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mode = 0o755
+            tf.addfile(info, io.BytesIO(data))
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _linux_tar_members(plat: str) -> dict[str, bytes]:
+    """Members of a BtbN-style archive for ``plat``: ``ffmpeg-n9.0.2-<plat>-gpl-9.0/bin/{ffmpeg,ffprobe}``."""
+    root = f"ffmpeg-n9.0.2-{plat}-gpl-9.0/bin"
+    return {f"{root}/ffmpeg": _FFMPEG_STUB, f"{root}/ffprobe": _FFPROBE_STUB}
+
+
+_LINUX_TAR_MEMBERS = _linux_tar_members("linux64")
+
+
+def _override_linux_pin(fn_text: str, machine: str, digest: str) -> str:
+    """Substitute the pinned digest for ``machine``'s BtbN platform in the extracted function text."""
+    plat = {"x86_64": "linux64", "aarch64": "linuxarm64"}[machine]
+    fn_text, count = re.subn(rf'(FF_PLAT="{plat}"\n\s+FF_EXPECT=)"[0-9a-f]{{64}}"', rf'\1"{digest}"', fn_text)
+    assert count == 1, plat
+    return fn_text
+
+
+def _run_linux_ffmpeg_install(tmp_path: Path, machine: str, members: dict[str, bytes] | None, *, pin_override: str | None):
+    """Execute install.sh's install_linux_ffmpeg() against a fixture archive with a stubbed curl.
+
+    ``members`` is the archive served for every URL (``None`` -> curl fails with
+    22). ``pin_override`` replaces the pinned digest for ``machine``'s platform in
+    the extracted function text only (install.sh itself is never modified).
+    Returns ``(result, bin_dir, ff_tmp, curl_log)`` where ``curl_log`` lists each
+    URL the stub was asked for.
+    """
+    script = _read_install_sh()
+    fn_text = _extract_shell_function(script, "install_linux_ffmpeg")
+    if pin_override is not None:
+        fn_text = _override_linux_pin(fn_text, machine, pin_override)
+    sha_fn = _extract_shell_function(script, "sha256_of")
+
+    mirror = tmp_path / "mirror"
+    mirror.mkdir()
+    if members is not None:
+        _make_tar_xz(mirror / "served.tar.xz", members)
+    curl_log = tmp_path / "curl.log"
+    curl_fn = (
+        "curl() {\n"
+        '    url="${@: -3:1}"; dest="${@: -1}"\n'
+        f'    echo "$url" >> "{_bash_path(curl_log)}"\n'
+        f'    src="{_bash_path(mirror)}/served.tar.xz"\n'
+        '    [ -f "$src" ] || return 22\n'
+        '    cp "$src" "$dest"\n'
+        "}\n"
+    )
+
+    venv_dir = tmp_path / "venv"
+    (venv_dir / "bin").mkdir(parents=True)
+    ff_tmp = tmp_path / "ff_tmp"
+    ff_tmp.mkdir()
+    driver = (
+        "set -u\n"
+        f"{curl_fn}{sha_fn}\n{fn_text}\n"
+        f'VENV_DIR="{_bash_path(venv_dir)}"\nFF_OK=0\n'
+        f'install_linux_ffmpeg "{_bash_path(ff_tmp)}" "{machine}"\n'
+        'echo "FF_OK=$FF_OK"\n'
+    )
+    result = subprocess.run([POSIX_BASH, "-c", driver], capture_output=True, text=True, check=False)
+    urls = curl_log.read_text().split() if curl_log.exists() else []
+    return result, venv_dir / "bin", ff_tmp, urls
+
+
+@_needs_bash
+@pytest.mark.parametrize(
+    ("machine", "plat"),
+    [pytest.param("x86_64", "linux64", id="linux64"), pytest.param("aarch64", "linuxarm64", id="linuxarm64")],
+)
+def test_install_linux_ffmpeg_accepts_matching_archive(tmp_path, machine, plat):
+    """A genuine archive (digest matches the pin for this arch) is fetched from the fixed tag and installed."""
+    members = _linux_tar_members(plat)
+    pin = _make_tar_xz(tmp_path / "probe.tar.xz", members)
+
+    result, bin_dir, _, urls = _run_linux_ffmpeg_install(tmp_path, machine, members, pin_override=pin)
+
+    assert (result.returncode, "FF_OK=1" in result.stdout) == (0, True), result.stderr
+    installed = {name: ((bin_dir / name).read_bytes(), os.access(bin_dir / name, os.X_OK)) for name in _installed_names(bin_dir)}
+    assert installed == {"ffmpeg": (_FFMPEG_STUB, True), "ffprobe": (_FFPROBE_STUB, True)}
+    # Exactly one download, from a fixed autobuild tag, for this arch's asset.
+    expected_url = f"https://github.com/BtbN/FFmpeg-Builds/releases/download/{LINUX_FFMPEG_TAG}/ffmpeg-n9.0.2-{plat}-gpl-9.0.tar.xz"
+    assert urls == [expected_url]
+
+
+@_needs_bash
+def test_install_linux_ffmpeg_rejects_digest_mismatch(tmp_path):
+    """A tampered archive is deleted on every attempt, retried three times, and nothing is installed."""
+    tampered = {**_LINUX_TAR_MEMBERS, "ffmpeg-n9.0.2-linux64-gpl-9.0/bin/ffmpeg": b"#!/bin/sh\necho evil\n"}
+
+    # pin_override=None keeps install.sh's real pinned digest, which the fixture cannot match.
+    result, bin_dir, ff_tmp, urls = _run_linux_ffmpeg_install(tmp_path, "x86_64", tampered, pin_override=None)
+
+    assert result.stdout.count("FFmpeg archive SHA-256 mismatch") == 3, result.stdout
+    assert result.stdout.count("Deleted corrupt archive") == 3
+    assert (len(urls), "FF_OK=0" in result.stdout, (ff_tmp / "ff.tar.xz").exists(), _installed_names(bin_dir)) == (3, True, False, set())
+    # The tampered payload never got extracted into the temp dir either.
+    assert not any(ff_tmp.rglob("ffmpeg"))
+
+
+@_needs_bash
+def test_install_linux_ffmpeg_handles_download_failure(tmp_path):
+    """A failed download is retried three times, leaves FF_OK=0 and installs nothing."""
+    result, bin_dir, _, urls = _run_linux_ffmpeg_install(tmp_path, "x86_64", None, pin_override=None)
+
+    assert (len(urls), "FF_OK=0" in result.stdout, _installed_names(bin_dir)) == (3, True, set())
+
+
+@_needs_bash
+def test_install_linux_ffmpeg_skips_unsupported_arch(tmp_path):
+    """An architecture without a pinned build is reported and never downloaded."""
+    result, bin_dir, _, urls = _run_linux_ffmpeg_install(tmp_path, "riscv64", _LINUX_TAR_MEMBERS, pin_override=None)
+
+    assert ("No prebuilt FFmpeg" in result.stdout, "FF_OK=0" in result.stdout, urls, _installed_names(bin_dir)) == (True, True, [], set())
 
 
 def test_get_linux_cpu_name_parses_cpuinfo():

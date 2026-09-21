@@ -48,7 +48,7 @@ Status: pass, all analyzed files are grade A.
 | tests/unit/test_pipeline_runner.py | A | 42.90 |
 | tests/unit/test_plugin_discovery.py | A | 68.68 |
 | tests/unit/test_progress_reporting.py | A | 86.35 |
-| tests/unit/test_runtime_helpers.py | A | 24.67 |
+| tests/unit/test_runtime_helpers.py | A | 21.31 |
 | tests/unit/test_version_reporting.py | A | 54.09 |
 | tests/unit/test_vspipe_environment.py | A | 55.51 |
 | tests/unit/test_windows_vspipe_environment.py | A | 69.45 |

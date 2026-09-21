@@ -457,18 +457,29 @@ EOF
 fi
 
 # ------------------------------------------------------------------------------
-# 6c. Install a self-contained FFmpeg 9.0.x (parity with Windows install.ps1)
+# 6c. Install a self-contained FFmpeg (parity with Windows install.ps1)
 # ------------------------------------------------------------------------------
-# install.ps1 drops a static FFmpeg 9.0.1 into the venv so the pipeline does not
+# install.ps1 drops a static FFmpeg 9.0.2 into the venv so the pipeline does not
 # depend on whatever the distro ships (Ubuntu 26.04 = 8.0.1). Do the same here:
-# fetch a static 9.0 build into .venv/bin, which the app puts first on PATH via
+# fetch a static build into .venv/bin, which the app puts first on PATH via
 # modules/core/utils.py:setup_environment. Set AVD_SKIP_FFMPEG=1 to skip.
-FFMPEG_SERIES="9.0"
+#
+# Exact patch release pinned below (evermeet FF_VER, BtbN FF_VER and the SHA-256
+# values). A .venv binary is only kept when it reports this exact version, so a
+# bump here replaces an older 9.0.x that a previous install left behind.
+FFMPEG_VERSION="9.0.2"
 
-ffmpeg_is_90() {
+# True when the binary reports exactly $FFMPEG_VERSION. Matches
+# "version 9.0.2 ..." (evermeet), "version n9.0.2-20260919 ..." (BtbN) and
+# "version 9.0.2-essentials_build ..." (gyan) but not 9.0.1 or 9.0.21.
+ffmpeg_is_pinned() {
     [ -x "$1" ] || return 1
     _ffv="$("$1" -version 2>/dev/null | head -n1 || true)"
-    case "$_ffv" in *"version n9.0"*|*"version 9.0"*) return 0 ;; *) return 1 ;; esac
+    case "$_ffv" in
+        *"version n${FFMPEG_VERSION} "*|*"version n${FFMPEG_VERSION}-"*|\
+        *"version ${FFMPEG_VERSION} "*|*"version ${FFMPEG_VERSION}-"*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # Download, verify and stage the evermeet.cx macOS FFmpeg/FFprobe builds.
@@ -481,9 +492,11 @@ ffmpeg_is_90() {
 # execute it against fixture archives with a stubbed curl.
 install_darwin_ffmpeg() {
     _ff_tmp="$1"
-    FF_VER="9.0.1"
-    FFMPEG_ZIP_EXPECTED_SHA256="8a8c9e549983409fe6604b9aa665648b7a5def9407fe814c39c8b2ea7f64a48f"
-    FFPROBE_ZIP_EXPECTED_SHA256="d13f35db03456b7f65b7edb6437c86e23810fbfe91795e571f5b77211343b4f1"
+    # Kept literal (not $FFMPEG_VERSION) so the function stays self-contained
+    # for the unit tests; keep it equal to FFMPEG_VERSION above.
+    FF_VER="9.0.2"
+    FFMPEG_ZIP_EXPECTED_SHA256="4acc0be580f9b2788029eb7bd4d645ff87968911b0a62aeeb3940d42d54558d5"
+    FFPROBE_ZIP_EXPECTED_SHA256="24a9c968cd4da72d99c7245e914b921815835eb6dff01d99868031aebaf1d439"
     FF_GOT_ALL=1
     for tool in ffmpeg ffprobe; do
         case "$tool" in
@@ -519,88 +532,98 @@ with zipfile.ZipFile(zip_path) as zf:
 PYEOF
     done
     if [ "$FF_GOT_ALL" = 1 ] && [ -f "$_ff_tmp/ffmpeg" ] && [ -f "$_ff_tmp/ffprobe" ]; then
-        cp "$_ff_tmp/ffmpeg" "$_ff_tmp/ffprobe" "$VENV_DIR/bin/"
-        chmod +x "$VENV_DIR/bin/ffmpeg" "$VENV_DIR/bin/ffprobe"
-        FF_OK=1
+        # Stage as one conditional so a cp/chmod failure does not abort the
+        # installer under set -e; FF_OK stays 0 and the caller removes any
+        # partial copy.
+        if cp "$_ff_tmp/ffmpeg" "$_ff_tmp/ffprobe" "$VENV_DIR/bin/" \
+           && chmod +x "$VENV_DIR/bin/ffmpeg" "$VENV_DIR/bin/ffprobe"; then
+            FF_OK=1
+        else
+            echo "[WARN] Could not stage the FFmpeg binaries into $VENV_DIR/bin."
+        fi
     fi
+}
+
+# Download, verify and stage the BtbN Linux FFmpeg build.
+# A fixed autobuild tag and the SHA-256 of each archive are pinned here (same
+# pattern as install_darwin_ffmpeg above and install.ps1). The "latest" tag is a
+# moving target, and its checksums.sha256 lives in the same release as the
+# archives, so it cannot protect against a swapped release. Bump FF_TAG, FF_VER
+# (keep equal to FFMPEG_VERSION) and both hashes together. Any archive that
+# does not match is deleted and nothing is installed.
+# Usage: install_linux_ffmpeg <tmp_dir> <uname -m>   -> sets FF_OK=1 on success.
+# Kept as a self-contained function so tests/unit/test_runtime_helpers.py can
+# execute it against fixture archives with a stubbed curl.
+install_linux_ffmpeg() {
+    _ff_tmp="$1"
+    FF_TAG="autobuild-2026-09-19-13-11"
+    FF_VER="9.0.2"
+    case "$2" in
+        x86_64|amd64)
+            FF_PLAT="linux64"
+            FF_EXPECT="c67af56466837059601a1abd22109b7b771eeea137c9ff4b1db0bde66192dbc6" ;;
+        aarch64|arm64)
+            FF_PLAT="linuxarm64"
+            FF_EXPECT="100182dfa879b37caa327b00f7020f04e2dd95c282e171efb92bff262259d463" ;;
+        *)
+            echo "[WARN] No prebuilt FFmpeg $FF_VER for architecture '$2'."
+            return 0 ;;
+    esac
+    FF_BASE="https://github.com/BtbN/FFmpeg-Builds/releases/download/${FF_TAG}"
+    FF_ASSET="ffmpeg-n${FF_VER}-${FF_PLAT}-gpl-${FF_VER%.*}.tar.xz"
+    for attempt in 1 2 3; do
+        rm -f "$_ff_tmp/ff.tar.xz"
+        curl -fsSL "$FF_BASE/$FF_ASSET" -o "$_ff_tmp/ff.tar.xz" || continue
+        FF_GOT="$(sha256_of "$_ff_tmp/ff.tar.xz")"
+        if [ "$FF_EXPECT" != "$FF_GOT" ]; then
+            echo "[WARN] FFmpeg archive SHA-256 mismatch on attempt $attempt (expected $FF_EXPECT, got $FF_GOT)."
+            rm -f "$_ff_tmp/ff.tar.xz"
+            echo "       Deleted corrupt archive; retrying download..."
+            continue
+        fi
+        if ! tar -xf "$_ff_tmp/ff.tar.xz" -C "$_ff_tmp"; then
+            echo "[WARN] Could not extract the FFmpeg archive on attempt $attempt."
+            rm -f "$_ff_tmp/ff.tar.xz"
+            continue
+        fi
+        FF_BIN="$(find "$_ff_tmp" -type d -name bin | head -n1)"
+        if [ -z "$FF_BIN" ] || [ ! -f "$FF_BIN/ffmpeg" ] || [ ! -f "$FF_BIN/ffprobe" ]; then
+            echo "[WARN] FFmpeg archive did not contain bin/ffmpeg and bin/ffprobe on attempt $attempt."
+            continue
+        fi
+        # Stage as one conditional so a cp/chmod failure (disk full, permissions)
+        # does not abort the installer under set -e; FF_OK stays 0 and the caller
+        # removes any partial copy.
+        if cp "$FF_BIN/ffmpeg" "$FF_BIN/ffprobe" "$VENV_DIR/bin/" \
+           && chmod +x "$VENV_DIR/bin/ffmpeg" "$VENV_DIR/bin/ffprobe"; then
+            FF_OK=1
+            return 0
+        fi
+        echo "[WARN] Could not stage the FFmpeg binaries into $VENV_DIR/bin."
+        return 0
+    done
 }
 
 if [ "${AVD_SKIP_FFMPEG:-0}" = "1" ]; then
     echo "[INFO] AVD_SKIP_FFMPEG=1 set; skipping bundled FFmpeg."
-elif ffmpeg_is_90 "$VENV_DIR/bin/ffmpeg" && ffmpeg_is_90 "$VENV_DIR/bin/ffprobe"; then
-    echo "[INFO] Local FFmpeg $FFMPEG_SERIES already present in .venv."
+elif ffmpeg_is_pinned "$VENV_DIR/bin/ffmpeg" && ffmpeg_is_pinned "$VENV_DIR/bin/ffprobe"; then
+    echo "[INFO] Local FFmpeg $FFMPEG_VERSION already present in .venv."
 else
-    echo "[INFO] Installing self-contained FFmpeg $FFMPEG_SERIES into .venv/bin..."
+    echo "[INFO] Installing self-contained FFmpeg $FFMPEG_VERSION into .venv/bin..."
     FF_TMP="$(mktemp -d)"
     FF_OK=0
     if [ "$OS_TYPE" = "Darwin" ]; then
         install_darwin_ffmpeg "$FF_TMP"
     else
-        case "$(uname -m)" in
-            x86_64|amd64)  FF_PLAT="linux64" ;;
-            aarch64|arm64) FF_PLAT="linuxarm64" ;;
-            *)             FF_PLAT="" ;;
-        esac
-        if [ -n "$FF_PLAT" ]; then
-            FF_BASE="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"
-            FF_ASSET="ffmpeg-n${FFMPEG_SERIES}-latest-${FF_PLAT}-gpl-${FFMPEG_SERIES}.tar.xz"
-            for attempt in 1 2 3; do
-                rm -f "$FF_TMP/ff.tar.xz" "$FF_TMP/checksums.sha256"
-                if curl -fsSL "$FF_BASE/$FF_ASSET" -o "$FF_TMP/ff.tar.xz"; then
-                    if curl -fsSL "$FF_BASE/checksums.sha256" -o "$FF_TMP/checksums.sha256" 2>/dev/null \
-                       && [ -s "$FF_TMP/checksums.sha256" ]; then
-                        FF_EXPECT="$(awk -v asset="$FF_ASSET" '{file=$2; sub(/^\*/, "", file); if (file == asset) {print tolower($1); exit}}' "$FF_TMP/checksums.sha256")"
-                        FF_GOT="$(sha256_of "$FF_TMP/ff.tar.xz")"
-                        if [ -z "$FF_EXPECT" ]; then
-                            echo "[WARN] FFmpeg archive checksum entry is unavailable for $FF_ASSET."
-                        elif [ "$FF_EXPECT" != "$FF_GOT" ]; then
-                            echo "[WARN] FFmpeg archive SHA-256 mismatch on attempt $attempt (expected $FF_EXPECT, got $FF_GOT)."
-                            rm -f "$FF_TMP/ff.tar.xz"
-                            echo "       Deleted corrupt archive; retrying download..."
-                            continue
-                        else
-                            FF_OK=1
-                        fi
-                    else
-                        echo "[WARN] FFmpeg archive checksum is unavailable; refusing the unverified download."
-                        FF_OK=0
-                        break
-                    fi
-                fi
-                if [ "$FF_OK" = 1 ]; then
-                    if ! tar -xf "$FF_TMP/ff.tar.xz" -C "$FF_TMP"; then
-                        echo "[WARN] Could not extract the FFmpeg archive on attempt $attempt."
-                        rm -f "$FF_TMP/ff.tar.xz"
-                        FF_OK=0
-                        continue
-                    fi
-                    FF_BIN="$(find "$FF_TMP" -type d -name bin | head -n1)"
-                    if [ -n "$FF_BIN" ] && [ -f "$FF_BIN/ffmpeg" ]; then
-                        cp "$FF_BIN/ffmpeg" "$VENV_DIR/bin/"
-                        chmod +x "$VENV_DIR/bin/ffmpeg"
-                        if [ -f "$FF_BIN/ffprobe" ]; then
-                            cp "$FF_BIN/ffprobe" "$VENV_DIR/bin/"
-                            chmod +x "$VENV_DIR/bin/ffprobe"
-                            break
-                        else
-                            FF_OK=0
-                        fi
-                    else
-                        FF_OK=0
-                    fi
-                fi
-            done
-        else
-            echo "[WARN] No prebuilt FFmpeg $FFMPEG_SERIES for architecture '$(uname -m)'."
-        fi
+        install_linux_ffmpeg "$FF_TMP" "$(uname -m)"
     fi
     rm -rf "$FF_TMP"
-    if ffmpeg_is_90 "$VENV_DIR/bin/ffmpeg"; then
+    if [ "$FF_OK" = 1 ] && ffmpeg_is_pinned "$VENV_DIR/bin/ffmpeg" && ffmpeg_is_pinned "$VENV_DIR/bin/ffprobe"; then
         echo "   -> $("$VENV_DIR/bin/ffmpeg" -version | head -n1)"
     else
         rm -f "$VENV_DIR/bin/ffmpeg" "$VENV_DIR/bin/ffprobe"
-        echo "[WARN] Could not install bundled FFmpeg $FFMPEG_SERIES; the pipeline will"
-        echo "       fall back to system FFmpeg. Install FFmpeg 9.0 manually for parity."
+        echo "[WARN] Could not install bundled FFmpeg $FFMPEG_VERSION; the pipeline will"
+        echo "       fall back to system FFmpeg. Install FFmpeg $FFMPEG_VERSION manually for parity."
     fi
 fi
 
