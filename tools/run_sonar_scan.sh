@@ -16,13 +16,13 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SONAR_HOST_URL="${SONAR_HOST_URL:-https://sonarcloud.io}"
 
-if [ -z "${SONAR_TOKEN:-}" ]; then
+if [[ -z "${SONAR_TOKEN:-}" ]]; then
   echo "SONAR_TOKEN is not set. Generate one in SonarQube and export it first." >&2
   exit 1
 fi
 
 # Sonar reads coverage from assets/coverage.xml; regenerate it unless told not to.
-if [ "${AVD_SONAR_SKIP_TESTS:-0}" != "1" ]; then
+if [[ "${AVD_SONAR_SKIP_TESTS:-0}" != "1" ]]; then
   mkdir -p "$REPO_ROOT/assets" "$REPO_ROOT/input"
   touch "$REPO_ROOT/input/test_video.mp4"
   ( cd "$REPO_ROOT" && AUTO_VHS_SKIP_HW_DETECT=1 poetry run pytest \
