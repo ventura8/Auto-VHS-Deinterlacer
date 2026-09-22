@@ -282,8 +282,10 @@ def test_auto_deinterlancer_export_public_symbols_guards(ad):
     export_public_symbols = getattr(ad, "_export_public_symbols")
     exported_by = getattr(ad, "_EXPORTED_BY")
 
+    missing_all_module = SimpleNamespace(__name__="missing_all")
+
     with pytest.raises(RuntimeError, match="must define __all__"):
-        export_public_symbols(SimpleNamespace(__name__="missing_all"))
+        export_public_symbols(missing_all_module)
 
     bad_all_module = SimpleNamespace(__name__="bad_all", __all__="not-a-sequence")
     with pytest.raises(TypeError, match="must be a list, tuple, or set"):

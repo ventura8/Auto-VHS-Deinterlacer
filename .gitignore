@@ -48,6 +48,7 @@ assets/radon_summary.md
 assets/radon_mi_summary.md
 assets/radon_raw.txt
 assets/radon_hal.txt
+assets/pytest-report.xml
 
 # VapourSynth & Plugins (Portable / Local)
 vs-plugins/

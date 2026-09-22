@@ -30,7 +30,8 @@ def test_build_ffmpeg_cmd_av1_with_atempo_and_adelay():
     cmd_str = " ".join(cmd)
     assert "-c:v libsvtav1" in cmd_str
     assert "-threads:v 32" in cmd_str
-    assert "-an" in cmd and "atempo" not in cmd_str
+    assert "-an" in cmd
+    assert "atempo" not in cmd_str
 
 
 def test_build_ffmpeg_cmd_av1_uses_nvenc_when_capable():
@@ -339,7 +340,8 @@ def test_av1_cpu_encoder_prefers_svt_then_libaom():
         libaom = get_av1_cpu_encoder_args()
     assert libaom[1] == "libaom-av1"
     # libaom needs an explicit target bitrate of 0 for constant-quality mode.
-    assert "-b:v" in libaom and libaom[libaom.index("-b:v") + 1] == "0"
+    assert "-b:v" in libaom
+    assert libaom[libaom.index("-b:v") + 1] == "0"
 
 
 def test_av1_cpu_encoder_falls_back_to_svt_when_listing_is_unavailable():

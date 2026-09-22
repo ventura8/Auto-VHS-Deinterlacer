@@ -202,10 +202,15 @@ def _calculate_audio_sync(input_path: Path, video_duration: float) -> float:
     return audio_duration / video_duration
 
 
+# atempo is rendered with six decimals below, so any ratio closer to 1.0 than
+# this formats to "1.000000" and would be a no-op filter.
+ATEMPO_NO_OP_TOLERANCE = 1e-6
+
+
 def _get_audio_filter_args(atempo: float) -> list[str]:
     """Return optional FFmpeg audio filter arguments."""
     audio_filters = []
-    if atempo != 1.0:
+    if abs(atempo - 1.0) > ATEMPO_NO_OP_TOLERANCE:
         audio_filters.append(f"atempo={atempo:.6f}")
     if AUDIO_OFFSET != 0:
         delay_ms = int(AUDIO_OFFSET * 1000)

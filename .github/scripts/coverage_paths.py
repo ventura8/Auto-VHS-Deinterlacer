@@ -21,7 +21,7 @@ def normalize_path(value: str) -> str:
 
 def _trim_trailing_separators(path: str) -> str:
     """Trim trailing separators without changing filesystem root paths."""
-    if path == "/" or (len(path) == 3 and path[0].isalpha() and path[1:] == ":/"):
+    if path == "/" or (len(path) == 3 and path[0].isalpha() and path.endswith(":/")):
         return path
     return path.rstrip("/")
 

@@ -9,7 +9,8 @@ def _load_coverage_paths_module():
     """Load the standalone CI helper module from the repository tree."""
     module_path = Path(__file__).parents[2] / ".github" / "scripts" / "coverage_paths.py"
     spec = importlib.util.spec_from_file_location("coverage_paths", module_path)
-    assert spec and spec.loader
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

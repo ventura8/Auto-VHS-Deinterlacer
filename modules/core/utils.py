@@ -403,7 +403,7 @@ def parse_ffmpeg_time(line_str):
         return None, None, None
 
     time_match = re.search(r"time=(\d{2}:\d{2}:\d{2}(?:\.\d+)?)", line_str)
-    speed_match = re.search(r"speed=\s*(\d+\.?\d*x)", line_str)
+    speed_match = re.search(r"speed=\s*(\d+(?:\.\d*)?x)", line_str)
 
     seconds, time_s = _parse_ffmpeg_timestamp_match(time_match)
     speed_s = _format_ffmpeg_speed_match(speed_match)
