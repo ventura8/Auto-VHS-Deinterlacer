@@ -111,6 +111,39 @@ def create_drift_stream(output_path: Path):
     subprocess.check_call(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
 
 
+def create_correctable_drift_stream(output_path: Path, video_seconds: int = 20, audio_extra: float = 0.08):
+    """Generate a capture whose audio drift is large enough to correct but under the percentage guard.
+
+    ``create_drift_stream`` produces 2s of video against 2.1s of audio, which is
+    ~5% drift and is always rejected by the percentage guard, so it never reaches
+    the atempo branch. The defaults here give 0.08s over 20s (0.4%), which clears
+    ``audio_drift_min_seconds`` while staying inside ``audio_drift_max_percent``.
+    """
+    audio_seconds = video_seconds + audio_extra
+    args = [
+        "ffmpeg",
+        "-y",
+        "-filter_complex",
+        (
+            f"testsrc=duration={video_seconds}:size=720x480:rate=60,"
+            f"tinterlace=mode=interleave_top,setfield=tff[v];"
+            f"sine=f=1000:d={audio_seconds}[a]"
+        ),
+        "-map",
+        "[v]",
+        "-map",
+        "[a]",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-c:a",
+        "aac",
+        str(output_path),
+    ]
+    subprocess.check_call(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=180)
+
+
 @contextlib.contextmanager
 def temporary_config_override(overrides: dict):
     """Temporarily override config.yaml with custom settings for a test scenario."""

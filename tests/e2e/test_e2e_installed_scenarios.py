@@ -6,9 +6,10 @@ from unittest.mock import patch
 import pytest
 
 from modules.core.utils import get_duration, get_fps, probe_stream_entry
-from modules.runtime.pipeline import process_video
+from modules.runtime.pipeline import _calculate_audio_sync, _get_audio_filter_args, process_video
 from tests.e2e.conftest import (
     check_media_binaries,
+    create_correctable_drift_stream,
     create_drift_stream,
     create_synthetic_stream,
     temporary_config_override,
@@ -72,6 +73,32 @@ def test_scenario_av_drift_correction(tmp_path):
     create_drift_stream(input_video)
 
     with temporary_config_override({"auto_drift_correction": True}):
+        result = process_video(input_video)
+        assert result["status"] == "success"
+        _assert_video_properties(result["output"], min_fps=50.0, min_duration=1.5)
+
+
+@pytest.mark.e2e
+@pytest.mark.real_deps
+def test_scenario_av_drift_applies_real_atempo(tmp_path):
+    """Drift inside the correctable window reaches the atempo branch and is applied.
+
+    test_scenario_av_drift_correction above uses a 5% drift, which the percentage
+    guard always rejects, so it never exercises the correction itself.
+    """
+    check_media_binaries()
+    input_video = tmp_path / "correctable_drift.mp4"
+    create_correctable_drift_stream(input_video)
+
+    with temporary_config_override({"auto_drift_correction": True}):
+        video_duration = get_duration(str(input_video))
+        atempo = _calculate_audio_sync(input_video, video_duration)
+
+        # The branch under test ran: a real, non-unity correction was computed.
+        assert atempo != 1.0
+        assert _get_audio_filter_args(atempo)[0] == "-af"
+        assert _get_audio_filter_args(atempo)[1].startswith("atempo=")
+
         result = process_video(input_video)
         assert result["status"] == "success"
         _assert_video_properties(result["output"], min_fps=50.0, min_duration=1.5)

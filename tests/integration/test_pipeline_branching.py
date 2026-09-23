@@ -34,6 +34,39 @@ def test_build_ffmpeg_cmd_av1_with_atempo_and_adelay():
     assert "atempo" not in cmd_str
 
 
+def _audio_filter_args(atempo):
+    """Return the filter args for ``atempo`` with the configured offset neutralised."""
+    pipeline = importlib.import_module("modules.runtime.pipeline")
+    with patch("modules.runtime.pipeline.AUDIO_OFFSET", 0):
+        return getattr(pipeline, "_get_audio_filter_args")(atempo)
+
+
+def _atempo_tolerance():
+    """Return the tolerance below which a correction is dropped."""
+    return getattr(importlib.import_module("modules.runtime.pipeline"), "ATEMPO_NO_OP_TOLERANCE")
+
+
+def test_audio_filter_args_skips_corrections_that_round_to_unity():
+    """A correction smaller than the render precision is dropped rather than applied.
+
+    "atempo=1.000000" is not a no-op in FFmpeg: the filter still resamples and
+    trims a fixed ~1ms off the tail (measured identical at 5s and 30s inputs).
+    Emitting no filter at all is what keeps such audio bit-exact.
+    """
+    tolerance = _atempo_tolerance()
+    within = (1.0, 1.0 + tolerance / 2, 1.0 - tolerance / 2)
+
+    assert [_audio_filter_args(value) for value in within] == [[], [], []]
+
+
+def test_audio_filter_args_applies_corrections_above_tolerance():
+    """A correction the render precision can express is passed to FFmpeg."""
+    tolerance = _atempo_tolerance()
+
+    assert _audio_filter_args(1.004) == ["-af", "atempo=1.004000"]
+    assert _audio_filter_args(1.0 + tolerance * 10) == ["-af", "atempo=1.000010"]
+
+
 def test_build_ffmpeg_cmd_av1_uses_nvenc_when_capable():
     """Build AV1 command with NVENC when hardware detection reports NVIDIA."""
     pipeline = importlib.import_module("modules.runtime.pipeline")

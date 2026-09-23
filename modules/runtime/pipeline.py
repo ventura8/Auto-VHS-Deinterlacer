@@ -202,8 +202,10 @@ def _calculate_audio_sync(input_path: Path, video_duration: float) -> float:
     return audio_duration / video_duration
 
 
-# atempo is rendered with six decimals below, so any ratio closer to 1.0 than
-# this formats to "1.000000" and would be a no-op filter.
+# Ratios closer to 1.0 than this render as "atempo=1.000000", which is NOT a
+# no-op: FFmpeg's atempo still resamples and drops ~1ms off the tail (a fixed
+# filter latency, measured identical at 5s and 30s). Skipping the filter
+# entirely for a correction that rounds away keeps the audio bit-exact.
 ATEMPO_NO_OP_TOLERANCE = 1e-6
 
 
