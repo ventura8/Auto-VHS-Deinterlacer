@@ -14,7 +14,27 @@ AV1_CPU_ENCODERS = (
 )
 
 PRORES_ARGS = ("-c:v", "prores_ks", "-profile:v", "3", "-vendor", "apl0", "-bits_per_mb", "8000", "-pix_fmt", "yuv422p10le")
-AV1_NVENC_ARGS = ("-c:v", "av1_nvenc", "-preset", "p5", "-cq", "22", "-b:v", "0", "-pix_fmt", "p010le")
+# The level must be pinned. Left to itself av1_nvenc stamps seq_level_idx 23
+# (level 7.3) into the sequence header even for a 720x480 source, and the AV1
+# spec does not define the 7.x levels, so libaom refuses the bitstream outright
+# ("Value 23 of seq_level_idx[0] is not yet defined") while dav1d accepts it.
+# 5.1 is a mainstream tier that covers anything up to 4K60, far above the SD
+# captures this pipeline produces.
+AV1_NVENC_LEVEL = "5.1"
+AV1_NVENC_ARGS = (
+    "-c:v",
+    "av1_nvenc",
+    "-preset",
+    "p5",
+    "-cq",
+    "22",
+    "-b:v",
+    "0",
+    "-level",
+    AV1_NVENC_LEVEL,
+    "-pix_fmt",
+    "p010le",
+)
 
 
 def get_av1_cpu_encoder_args() -> list[str]:
@@ -56,6 +76,7 @@ def log_encoder_execution_path(encoder: str, hardware_settings: dict):
 
 __all__ = [
     "AV1_CPU_ENCODERS",
+    "AV1_NVENC_LEVEL",
     "get_av1_cpu_encoder_args",
     "get_video_encoder_args",
     "log_encoder_execution_path",

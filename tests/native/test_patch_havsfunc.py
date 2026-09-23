@@ -167,8 +167,9 @@ def test_patch_havsfunc_replace_text_warning_path():
 
 def test_patch_havsfunc_replace_text_required_path():
     """Replace-text helper should raise on missing required targets."""
+    replace_text = getattr(patch_havsfunc, "_replace_text")
     with pytest.raises(RuntimeError):
-        getattr(patch_havsfunc, "_replace_text")("foo", "required", "zzz", "bar", required=True)
+        replace_text("foo", "required", "zzz", "bar", required=True)
 
 
 def test_patch_havsfunc_replace_regex_success_path():
@@ -189,8 +190,9 @@ def test_patch_havsfunc_replace_regex_warning_path():
 
 def test_patch_havsfunc_replace_regex_required_path():
     """Replace-regex helper should raise on missing required targets."""
+    replace_regex = getattr(patch_havsfunc, "_replace_regex")
     with pytest.raises(RuntimeError):
-        getattr(patch_havsfunc, "_replace_regex")("ab", "required_rx", r"\d+", "", required=True)
+        replace_regex("ab", "required_rx", r"\d+", "", required=True)
 
 
 def test_patch_havsfunc_handles_multiline_docstring_and_future_import_insertion():

@@ -397,7 +397,8 @@ def test_process_video_pipeline():
                                                     args, _ = mock_popen.call_args_list[1]
                                                     cmd = args[0]
                                                     # We are using rawvideo pipe now, not yuv4mpegpipe wrapper
-                                                    assert "-f" in cmd and "rawvideo" in cmd
+                                                    assert "-f" in cmd
+                                                    assert "rawvideo" in cmd
 
 
 def test_update_progress_visual():

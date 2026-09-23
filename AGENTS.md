@@ -12,7 +12,7 @@ models for audio separation, hardware-adaptive threading, and
 audio-video synchronization.
 
 - **Version single source of truth**: Pinned in `pyproject.toml`
-  (`[project].version`, currently `1.1.4`).
+  (`[project].version`, currently `1.1.5`).
 - **Runtime Environment**: Windows-first on Python 3.12 (CPython
   64-bit) with virtualenv located at `.VENV`.
 
@@ -30,8 +30,9 @@ audio-video synchronization.
   - `auto_deinterlancer.py`: CLI entrypoint and parameter
     validation wrapper.
 - **No Suppressions Allowed**: Never add `# noqa`, `# pylint: disable`,
-  `# type: ignore`, or inline suppression comments. Fix issues
-  at the root.
+  `# type: ignore`, `# NOSONAR`, or inline suppression comments. Fix issues
+  at the root. The same applies to marking SonarQube issues "Won't fix" or
+  "False positive" in place of a real fix.
 - **Coverage Invariant**: Maintain ≥90% line coverage
   per-file and repository-wide across product code (`auto_deinterlancer.py`
   and `modules/`) with branch coverage measurement enabled; CI/automation
@@ -124,6 +125,21 @@ audio-video synchronization.
    .\.VENV\Scripts\python.exe -m poetry run genbadge coverage -i assets/coverage.xml -o assets/coverage.svg
    ```
 
+1. **SonarQube Cloud Analysis** (optional locally, enforced in CI):
+
+   The helper is a Bash script, so on Windows run it from Git Bash or WSL
+   rather than PowerShell:
+
+   ```bash
+   export SONAR_TOKEN="<your-token>"
+   ./tools/run_sonar_scan.sh
+   ```
+
+   See [SonarQube Analysis](docs/SONARQUBE.md). CI runs this automatically
+   and fails the build when the quality gate fails; the step is skipped with
+   a warning when `SONAR_TOKEN` is absent, so a missing token does not block
+   fork pull requests. Every other CI check still applies to them.
+
 1. **Full Automated Local Pipeline**:
 
    - Windows (PowerShell): `.\run_pipeline_localy.ps1` (virtual environment at `.VENV`, interpreter at `.\.VENV\Scripts\python.exe`)
@@ -151,3 +167,4 @@ The workspace provides on-demand agent skills in `.agents/skills/`:
 - [Validation Guide](.agent/validation.md)
 - [Lint Workflow](.agent/workflows/fix-lints.md)
 - [Agent Instructions](.agent/Instructions.md)
+- [SonarQube Analysis](docs/SONARQUBE.md)

@@ -6,7 +6,7 @@ import pytest
 
 from modules.core.utils import get_duration, get_fps, probe_stream_entry
 from modules.runtime.pipeline import process_video
-from tests.e2e.conftest import check_media_binaries, create_synthetic_stream
+from tests.e2e.conftest import assert_output_is_decodable, check_media_binaries, create_synthetic_stream
 
 
 def _verify_field_order(video_path: Path) -> str:
@@ -15,11 +15,12 @@ def _verify_field_order(video_path: Path) -> str:
 
 
 def _assert_success_output(out_file: Path):
-    """Assert properties of success output video file."""
+    """Assert the output file's properties and that its frames really decode."""
     assert out_file.exists()
     assert out_file.stat().st_size > 0
     assert get_fps(str(out_file)) > 50.0
     assert get_duration(str(out_file)) > 0.5
+    assert_output_is_decodable(out_file)
 
 
 def _verify_pipeline_output(result: dict):

@@ -54,7 +54,8 @@ class FakeEncoder:
 
 def _fake_mux(cmd, check=False, capture_output=False):
     """Simulate the concat+mux FFmpeg call by writing the output part file."""
-    assert check is False and capture_output is True
+    assert check is False
+    assert capture_output is True
     Path(cmd[-1]).write_bytes(b"muxed")
     return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
@@ -204,7 +205,8 @@ def test_mux_failure_keeps_workspace_and_reports_stderr(source):
     with patch("modules.runtime.pipeline.log_error") as mock_error:
         result = _run(source, FakeEncoder(), mux=failing_mux)
 
-    assert result["status"] == "failed" and not _get_output_path(source).exists()
+    assert result["status"] == "failed"
+    assert not _get_output_path(source).exists()
     assert all(ws_module.segment_path(workspace, i, ".mov").exists() for i in range(4))
     assert any("concat failed" in call.args[0] for call in mock_error.call_args_list)
 

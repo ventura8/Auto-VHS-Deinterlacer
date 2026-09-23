@@ -5,6 +5,7 @@
 Studio-Reference VHS Restoration Pipeline
 
 ![Coverage](assets/coverage.svg)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=ventura8_Auto-VHS-Deinterlacer&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=ventura8_Auto-VHS-Deinterlacer)
 [![GitHub release downloads](https://img.shields.io/github/downloads/ventura8/Auto-VHS-Deinterlacer/total?label=downloads&logo=github)](https://github.com/ventura8/Auto-VHS-Deinterlacer/releases)
 
 Automated deinterlacing and audio synchronization tool for modernizing VHS

@@ -6,16 +6,22 @@ import sys
 
 from modules.core.utils import get_project_root
 
+HAVSFUNC_FILENAME = "havsfunc.py"
+VENV_DIR = ".venv"
+VENV_DIR_UPPER = ".VENV"
+
 
 def _get_havsfunc_path() -> str:
     """Return the expected havsfunc.py path inside the local venv across platforms."""
     root = get_project_root()
     py_ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    posix_layout = ("lib", py_ver, "site-packages")
+    windows_layout = ("Lib", "site-packages")
     candidates = [
-        os.path.join(root, ".venv", "lib", py_ver, "site-packages", "havsfunc.py"),
-        os.path.join(root, ".VENV", "lib", py_ver, "site-packages", "havsfunc.py"),
-        os.path.join(root, ".venv", "Lib", "site-packages", "havsfunc.py"),
-        os.path.join(root, ".VENV", "Lib", "site-packages", "havsfunc.py"),
+        os.path.join(root, VENV_DIR, *posix_layout, HAVSFUNC_FILENAME),
+        os.path.join(root, VENV_DIR_UPPER, *posix_layout, HAVSFUNC_FILENAME),
+        os.path.join(root, VENV_DIR, *windows_layout, HAVSFUNC_FILENAME),
+        os.path.join(root, VENV_DIR_UPPER, *windows_layout, HAVSFUNC_FILENAME),
     ]
 
     for candidate in candidates:
@@ -25,7 +31,7 @@ def _get_havsfunc_path() -> str:
     # If neither exists yet, return preferred platform path
     if sys.platform != "win32":
         return candidates[0]
-    return os.path.join(root, ".venv", "Lib", "site-packages", "havsfunc.py")
+    return os.path.join(root, VENV_DIR, *windows_layout, HAVSFUNC_FILENAME)
 
 
 def _read_text(path_value: str) -> str:
@@ -361,11 +367,9 @@ def _apply_opencl_partial_patches(content: str, qinterp_patched: bool) -> str:
         ("nnedi3_opencl_partial", "myNNEDI3 = core.nnedi3cl.NNEDI3CL", "myNNEDI3 = " + _build_opencl_partial("core.nnedi3cl.NNEDI3CL")),
         ("eedi3_opencl_partial", "myEEDI3 = core.eedi3m.EEDI3CL", "myEEDI3 = " + _build_opencl_partial("core.eedi3m.EEDI3CL")),
     ]
-    total_matches = 0
     for patch_name, old_text, new_text in replacements:
         content, match_count = _replace_text_in_function_block(content, "QTGMC_Interpolate", patch_name, old_text, new_text, required=False)
         if match_count > 0:
-            total_matches += match_count
             continue
         if not qinterp_patched:
             print(f"WARNING: [{patch_name}] target not found")

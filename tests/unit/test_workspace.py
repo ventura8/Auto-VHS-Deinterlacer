@@ -90,7 +90,8 @@ def test_prepare_workspace_creates_layout_and_removes_partials(tmp_path):
 
     ws_module.prepare_workspace(workspace)
 
-    assert workspace.index_dir.is_dir() and finished.exists()
+    assert workspace.index_dir.is_dir()
+    assert finished.exists()
     assert not any(path.exists() for path in (partial, workspace.output_part, workspace.concat_list))
 
 
@@ -389,7 +390,8 @@ def test_sync_state_preserves_recorded_source_identity(tmp_path):
     ws_module.sync_state(workspace, "fp-1")
 
     state = ws_module.load_state(workspace)
-    assert state["source_id"] == "src-1" and state["fingerprint"] == "fp-1"
+    assert state["source_id"] == "src-1"
+    assert state["fingerprint"] == "fp-1"
 
 
 def test_compute_source_identity_ignores_settings(tmp_path):
@@ -397,8 +399,10 @@ def test_compute_source_identity_ignores_settings(tmp_path):
     workspace = _make_workspace(tmp_path)
     source = workspace.root.parent / "tape.mpg"
 
-    assert ws_module.compute_source_identity(source) == ws_module.compute_source_identity(source)
-    assert ws_module.compute_source_identity(source) != ws_module.compute_fingerprint(source, {"encoder": "prores"})
+    identity = ws_module.compute_source_identity(source)
+
+    assert identity == ws_module.compute_source_identity(source)
+    assert identity != ws_module.compute_fingerprint(source, {"encoder": "prores"})
 
 
 @pytest.mark.parametrize(

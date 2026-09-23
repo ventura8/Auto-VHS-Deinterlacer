@@ -420,6 +420,66 @@ else {
     }
 }
 
+# ==============================================================================
+# 5b. NVENC (NVIDIA hardware encoding)
+# ==============================================================================
+# On Windows NVIDIA's display driver always ships the NVENC runtime
+# (nvEncodeAPI64.dll), and the bundled FFmpeg carries NVENC support, so there is
+# nothing to install here. What can still go wrong is the GPU (RTX 30 series and
+# older have NVENC but no AV1 encoder) or a driver older than this FFmpeg's
+# NVENC SDK. Encode one real frame, mirroring
+# modules/core/utils.py:has_av1_nvenc_capability, and report the outcome: the
+# encoder being listed proves nothing. Set AVD_SKIP_NVENC=1 to skip this.
+function Get-Av1NvencStatus([string]$ffmpegExe) {
+    # This installer runs with $ErrorActionPreference = "Stop", under which a
+    # native command's stderr (Windows PowerShell 5.1) or non-zero exit code
+    # (PowerShell 7 with PSNativeCommandUseErrorActionPreference) terminates the
+    # script, and a failed probe is an expected outcome. "Continue" rather than
+    # "SilentlyContinue": on 5.1 each stderr line arrives as an ErrorRecord, and
+    # SilentlyContinue drops those before 2>&1 merges them, leaving nothing to
+    # classify (verified on 5.1.26100). Records are unwrapped to their plain
+    # message. Preference variables assigned here are local to this function.
+    $ErrorActionPreference = "Continue"
+    $PSNativeCommandUseErrorActionPreference = $false
+    $probeLines = & $ffmpegExe -hide_banner -loglevel error -f lavfi -i "color=c=black:s=256x256:r=1" `
+        -frames:v 1 -c:v av1_nvenc -f null - 2>&1 | ForEach-Object {
+        if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
+    }
+    $probeOutput = $probeLines -join "`n"
+    if ($LASTEXITCODE -eq 0) {
+        return "[OK] AV1 NVENC available: AV1 output will be encoded on the GPU."
+    }
+    if ($probeOutput -match "minimum required Nvidia driver for nvenc is (\S+)") {
+        return "[WARNING] The NVIDIA driver is too old for this FFmpeg's NVENC; it needs $($Matches[1]) or newer. Update the NVIDIA driver to enable GPU encoding."
+    }
+    if ($probeOutput -match "No capable devices") {
+        return "[INFO] This GPU has NVENC but no AV1 encoder (AV1 NVENC needs an RTX 40 or 50 series GPU)."
+    }
+    $firstLine = ($probeOutput -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
+    return "[WARNING] AV1 NVENC probe failed: $firstLine"
+}
+
+if ($env:AVD_SKIP_NVENC -eq "1") {
+    Write-Output "[INFO] AVD_SKIP_NVENC=1 set; skipping the NVENC check."
+}
+elseif (-not (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) {
+    Write-Output "[INFO] No NVIDIA driver found; NVENC unavailable. AV1 output will use the CPU encoder."
+}
+else {
+    $nvencProbeExe = if (Test-Path $ffmpegDest) { $ffmpegDest } else { (Get-Command ffmpeg -ErrorAction SilentlyContinue).Source }
+    if ($nvencProbeExe) {
+        Write-Output "[INFO] Checking NVIDIA NVENC hardware encoding..."
+        $nvencStatus = Get-Av1NvencStatus $nvencProbeExe
+        Write-Output $nvencStatus
+        if (-not $nvencStatus.StartsWith("[OK]")) {
+            Write-Output "       AV1 output will use the CPU encoder instead; ProRes output is unaffected."
+        }
+    }
+    else {
+        Write-Output "[WARNING] No FFmpeg found to probe NVENC with; skipping the NVENC check."
+    }
+}
+
 Write-Output ""
 Write-Output "=================================================="
 # ==============================================================================

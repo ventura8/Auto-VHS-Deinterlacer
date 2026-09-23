@@ -162,8 +162,9 @@ def test_vspipe_native_write_raw_success_and_error_path():
     failing_clip = FailingClip()
     with patch.object(native.sys, "stdout", fake_stdout):
         with patch.object(native.sys, "exit", side_effect=SystemExit(1)):
+            write_raw_output = getattr(native, "_write_raw_output")
             with pytest.raises(SystemExit):
-                getattr(native, "_write_raw_output")(failing_clip)
+                write_raw_output(failing_clip)
 
     class BrokenOut:
         """Output stream simulation raising broken-pipe writes."""
@@ -179,8 +180,9 @@ def test_vspipe_native_write_raw_success_and_error_path():
     broken_stdout = SimpleNamespace(buffer=BrokenOut(), close=lambda: (_ for _ in ()).throw(OSError("close")))
     with patch.object(native.sys, "stdout", broken_stdout):
         with patch.object(native.sys, "exit", side_effect=SystemExit(0)):
+            write_raw_output = getattr(native, "_write_raw_output")
             with pytest.raises(SystemExit):
-                getattr(native, "_write_raw_output")(clip)
+                write_raw_output(clip)
 
 
 def test_vspipe_native_write_y4m_success_and_broken_pipe_path():
@@ -224,8 +226,9 @@ def test_vspipe_native_write_y4m_success_and_broken_pipe_path():
     with patch.object(native.sys, "stdout", fake_stdout):
         with patch.object(native.os, "write", side_effect=BrokenPipeError):
             with patch.object(native.sys, "exit", side_effect=SystemExit(0)):
+                write_y4m_output = getattr(native, "_write_y4m_output")
                 with pytest.raises(SystemExit):
-                    getattr(native, "_write_y4m_output")(clip, "H\n")
+                    write_y4m_output(clip, "H\n")
 
     class BadClip:
         """Clip failing during frame iteration."""
@@ -240,8 +243,9 @@ def test_vspipe_native_write_y4m_success_and_broken_pipe_path():
     bad_clip = BadClip()
     with patch.object(native.sys, "stdout", fake_stdout):
         with patch.object(native.sys, "exit", side_effect=SystemExit(1)):
+            write_y4m_output = getattr(native, "_write_y4m_output")
             with pytest.raises(SystemExit):
-                getattr(native, "_write_y4m_output")(bad_clip, "YUV4MPEG2 header\n")
+                write_y4m_output(bad_clip, "YUV4MPEG2 header\n")
 
 
 def test_vspipe_native_log_frame_progress_uses_one_based_count():
@@ -357,8 +361,9 @@ def test_vspipe_native_write_all_raises_on_short_write():
     native = _load_vspipe_native(fake_vs)
 
     with patch.object(native.os, "write", return_value=0):
+        write_all = getattr(native, "_write_all")
         with pytest.raises(OSError):
-            getattr(native, "_write_all")(1, b"abc")
+            write_all(1, b"abc")
 
 
 def test_vspipe_native_write_y4m_numpy_path_and_broken_pipe_close_error():
@@ -419,8 +424,9 @@ def test_vspipe_native_write_y4m_numpy_path_and_broken_pipe_close_error():
     with patch.object(native.sys, "stdout", closing_stdout):
         with patch.object(native.os, "write", side_effect=BrokenPipeError):
             with patch.object(native.sys, "exit", side_effect=SystemExit(0)):
+                write_y4m_output = getattr(native, "_write_y4m_output")
                 with pytest.raises(SystemExit):
-                    getattr(native, "_write_y4m_output")(clip, "Y4M\n")
+                    write_y4m_output(clip, "Y4M\n")
 
 
 def test_vspipe_native_write_raw_setmode_error_and_nonzero_frame_branch():
@@ -543,10 +549,12 @@ def test_vspipe_native_parse_cli_args_frame_range():
     assert getattr(native, "_parse_cli_args")(["clip.vpy"]) == ("clip.vpy", False, None, None)
 
     with patch.object(native.sys, "exit", side_effect=SystemExit(1)):
+        parse_cli_args = getattr(native, "_parse_cli_args")
         with pytest.raises(SystemExit):
-            getattr(native, "_parse_cli_args")(["--start", "ten", "clip.vpy"])
+            parse_cli_args(["--start", "ten", "clip.vpy"])
+        parse_cli_args = getattr(native, "_parse_cli_args")
         with pytest.raises(SystemExit):
-            getattr(native, "_parse_cli_args")(["clip.vpy", "--end"])
+            parse_cli_args(["clip.vpy", "--end"])
 
 
 def test_vspipe_native_slice_clip_matches_vspipe_inclusive_range():

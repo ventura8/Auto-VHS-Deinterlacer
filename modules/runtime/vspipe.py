@@ -152,14 +152,14 @@ def _first_existing_plugin(plugin_dir: str, file_names: list[str]) -> str | None
     return None
 
 
-def _resolve_plugin_stems(base_name: str) -> tuple[str, ...]:
+def _resolve_plugin_stems(base_name: str) -> list[str]:
     """Resolve normalized stem and any known aliases for a plugin base name."""
     stem = base_name.split(".")[0].lower().removeprefix("lib")
     if stem == "lsmashsource":
-        return (stem, "vslsmashsource")
+        return [stem, "vslsmashsource"]
     if stem == "removegrainvs":
-        return (stem, "removegrain")
-    return (stem,)
+        return [stem, "removegrain"]
+    return [stem]
 
 
 def _generate_plugin_candidates(base_name: str) -> list[str]:
@@ -350,49 +350,54 @@ def _build_qtgmc_args(current_settings):
     return qtgmc_args
 
 
+# Static body of the generated VPY script. Kept as one template rather than a
+# sequence of appends so the emitted Python is readable in one place.
+_QTGMC_FALLBACK_BODY = """def _run_bob_fallback(src_clip, args):
+    tff_val = args.get('TFF', True)
+    try:
+        return haf.Bob(src_clip, 0, 0.5, tff_val)
+    except Exception:
+        return src_clip.std.SeparateFields(tff=tff_val).std.DoubleWeave(tff=tff_val)
+def _run_qtgmc_with_fallback(src_clip, args):
+    retry_args = dict(args)
+    for _ in range(4):
+        try:
+            return haf.QTGMC(src_clip, **retry_args)
+        except TypeError as qtgmc_err:
+            if "unexpected keyword argument 'device'" in str(qtgmc_err) and 'device' in retry_args:
+                retry_args = dict(retry_args)
+                retry_args.pop('device', None)
+                continue
+            raise
+        except Exception as qtgmc_err:
+            err_text = str(qtgmc_err)
+            missing_opencl_symbol = (
+                "There is no function named EEDI3CL" in err_text
+                or "There is no function named NNEDI3CL" in err_text
+            )
+            if retry_args.get('opencl') and missing_opencl_symbol:
+                retry_args = dict(retry_args)
+                retry_args['opencl'] = False
+                retry_args.pop('device', None)
+                continue
+            if 'fmtc' in err_text:
+                retry_args = dict(retry_args)
+                retry_args['SourceMatch'] = 0
+                retry_args['Lossless'] = 0
+                continue
+            print(
+                f'[QTGMC FALLBACK] QTGMC failed ({type(qtgmc_err).__name__}: {qtgmc_err}); '
+                f'falling back to Bob - deinterlacing quality is degraded.',
+                file=sys.stderr,
+            )
+            return _run_bob_fallback(src_clip, retry_args)
+    return _run_bob_fallback(src_clip, retry_args)"""
+
+
 def _append_qtgmc_fallback_body(lines, qtgmc_args):
     """Append QTGMC invocation and fallback behavior to the VPY script."""
     lines.append("qtgmc_args = " + str(qtgmc_args))
-    lines.append("def _run_bob_fallback(src_clip, args):")
-    lines.append("    tff_val = args.get('TFF', True)")
-    lines.append("    try:")
-    lines.append("        return haf.Bob(src_clip, 0, 0.5, tff_val)")
-    lines.append("    except Exception:")
-    lines.append("        return src_clip.std.SeparateFields(tff=tff_val).std.DoubleWeave(tff=tff_val)")
-    lines.append("def _run_qtgmc_with_fallback(src_clip, args):")
-    lines.append("    retry_args = dict(args)")
-    lines.append("    for _ in range(4):")
-    lines.append("        try:")
-    lines.append("            return haf.QTGMC(src_clip, **retry_args)")
-    lines.append("        except TypeError as qtgmc_err:")
-    lines.append("            if \"unexpected keyword argument 'device'\" in str(qtgmc_err) and 'device' in retry_args:")
-    lines.append("                retry_args = dict(retry_args)")
-    lines.append("                retry_args.pop('device', None)")
-    lines.append("                continue")
-    lines.append("            raise")
-    lines.append("        except Exception as qtgmc_err:")
-    lines.append("            err_text = str(qtgmc_err)")
-    lines.append("            missing_opencl_symbol = (")
-    lines.append('                "There is no function named EEDI3CL" in err_text')
-    lines.append('                or "There is no function named NNEDI3CL" in err_text')
-    lines.append("            )")
-    lines.append("            if retry_args.get('opencl') and missing_opencl_symbol:")
-    lines.append("                retry_args = dict(retry_args)")
-    lines.append("                retry_args['opencl'] = False")
-    lines.append("                retry_args.pop('device', None)")
-    lines.append("                continue")
-    lines.append("            if 'fmtc' in err_text:")
-    lines.append("                retry_args = dict(retry_args)")
-    lines.append("                retry_args['SourceMatch'] = 0")
-    lines.append("                retry_args['Lossless'] = 0")
-    lines.append("                continue")
-    lines.append("            print(")
-    lines.append("                f'[QTGMC FALLBACK] QTGMC failed ({type(qtgmc_err).__name__}: {qtgmc_err}); '")
-    lines.append("                f'falling back to Bob - deinterlacing quality is degraded.',")
-    lines.append("                file=sys.stderr,")
-    lines.append("            )")
-    lines.append("            return _run_bob_fallback(src_clip, retry_args)")
-    lines.append("    return _run_bob_fallback(src_clip, retry_args)")
+    lines.extend(_QTGMC_FALLBACK_BODY.split("\n"))
 
 
 def _get_prefetch_raw_value():
@@ -582,7 +587,7 @@ def create_vpy_script(input_file, output_script, _mode, override_settings=None, 
     _append_prefetch(lines, current_settings)
 
     resolved_prefetch = _resolve_prefetch_threads(current_settings)
-    log_info("[VSPIPE CONFIG] " f"core.num_threads={current_settings['cpu_threads']}, " f"prefetch_threads={resolved_prefetch}")
+    log_info(f"[VSPIPE CONFIG] core.num_threads={current_settings['cpu_threads']}, prefetch_threads={resolved_prefetch}")
 
     log_debug(f"[DEBUG] Generating VPY for: {safe_input}")
     _write_vpy_script(output_script, lines)

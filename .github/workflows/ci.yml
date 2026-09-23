@@ -23,6 +23,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # SonarQube Cloud needs full history to attribute issues to new code.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -181,7 +183,7 @@ jobs:
           AUTO_VHS_SKIP_HW_DETECT: "1"
         run: |
           mkdir -p assets
-          poetry run pytest --cov=modules --cov=auto_deinterlancer --cov-branch --cov-report=xml:assets/coverage.xml --cov-report=term --cov-fail-under=90 tests/
+          poetry run pytest --cov=modules --cov=auto_deinterlancer --cov-branch --cov-report=xml:assets/coverage.xml --cov-report=term --cov-fail-under=90 --junitxml=assets/pytest-report.xml tests/
 
       - name: Enforce Per-File Coverage >= 90%
         run: |
@@ -191,6 +193,32 @@ jobs:
         run: |
           poetry run python .github/scripts/generate_coverage_summary.py assets/coverage.xml > assets/coverage_summary.md
           cat assets/coverage_summary.md >> $GITHUB_STEP_SUMMARY
+
+      # Pull requests from forks never receive secrets, and the scan cannot run
+      # before SONAR_TOKEN is configured; warn and skip instead of failing.
+      - name: Check SonarQube Cloud Token
+        id: sonar_token
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -n "$SONAR_TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::SONAR_TOKEN is not set - skipping the SonarQube Cloud scan. See docs/SONARQUBE.md."
+          fi
+
+      # Scans against SonarQube Cloud and fails the job if the quality gate
+      # fails. Requires the SONAR_TOKEN repository secret; see docs/SONARQUBE.md.
+      - name: Run SonarQube Cloud Scan
+        if: steps.sonar_token.outputs.available == 'true'
+        uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4 # v8.2.2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+        with:
+          args: >
+            -Dsonar.qualitygate.wait=true
 
   ubuntu_docker_e2e:
     name: "🐳 Ubuntu Docker Real-Dependency E2E"
