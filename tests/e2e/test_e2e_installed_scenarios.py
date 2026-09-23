@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
+from modules.core.config import HW_SETTINGS
 from modules.core.utils import get_duration, get_fps, probe_stream_entry
 from modules.runtime.pipeline import _calculate_audio_sync, _get_audio_filter_args, process_video
 from tests.e2e.conftest import (
@@ -14,6 +15,7 @@ from tests.e2e.conftest import (
     create_drift_stream,
     create_synthetic_stream,
     temporary_config_override,
+    video_encoder_tag,
 )
 
 
@@ -119,6 +121,12 @@ def test_scenario_av1_encoder(tmp_path):
             result = process_video(input_video)
             assert result["status"] == "success"
             _assert_video_properties(result["output"], min_fps=59.0, min_duration=0.5)
+
+    # The encoder that produced the stream must be the one detection promised:
+    # on NVENC hardware this catches a silent CPU fallback, and elsewhere it
+    # confirms the CPU path really ran on the CPU.
+    encoder_tag = video_encoder_tag(result["output"])
+    assert ("av1_nvenc" in encoder_tag) == bool(HW_SETTINGS.get("has_av1_nvenc")), encoder_tag
 
 
 @pytest.mark.e2e

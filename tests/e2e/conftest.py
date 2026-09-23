@@ -150,6 +150,33 @@ def assert_output_is_decodable(output_path: Path):
         _assert_av1_level_is_defined(output_path)
 
 
+def video_encoder_tag(output_path: Path) -> str:
+    """Return the ENCODER tag FFmpeg wrote on the first video stream, e.g. "Lavc av1_nvenc".
+
+    The tag names the encoder that actually produced the stream, so it tells a
+    hardware encode from a CPU fallback even when the pipeline log is not shown.
+    """
+    probe = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream_tags=ENCODER",
+            "-of",
+            "default=nw=1:nk=1",
+            str(output_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    return probe.stdout.strip()
+
+
 def create_correctable_drift_stream(output_path: Path, video_seconds: int = 20, audio_extra: float = 0.08):
     """Generate a capture whose audio drift is large enough to correct but under the percentage guard.
 
