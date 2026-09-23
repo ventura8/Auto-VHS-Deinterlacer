@@ -434,13 +434,18 @@ function Get-Av1NvencStatus([string]$ffmpegExe) {
     # This installer runs with $ErrorActionPreference = "Stop", under which a
     # native command's stderr (Windows PowerShell 5.1) or non-zero exit code
     # (PowerShell 7 with PSNativeCommandUseErrorActionPreference) terminates the
-    # script. A failed probe is an expected outcome, so relax both - the same
-    # guard the vsrepo calls use. Preference variables assigned here are local
-    # to this function and do not change the rest of the install.
-    $ErrorActionPreference = "SilentlyContinue"
+    # script, and a failed probe is an expected outcome. "Continue" rather than
+    # "SilentlyContinue": on 5.1 each stderr line arrives as an ErrorRecord, and
+    # SilentlyContinue drops those before 2>&1 merges them, leaving nothing to
+    # classify (verified on 5.1.26100). Records are unwrapped to their plain
+    # message. Preference variables assigned here are local to this function.
+    $ErrorActionPreference = "Continue"
     $PSNativeCommandUseErrorActionPreference = $false
-    $probeOutput = & $ffmpegExe -hide_banner -loglevel error -f lavfi -i "color=c=black:s=256x256:r=1" `
-        -frames:v 1 -c:v av1_nvenc -f null - 2>&1 | Out-String
+    $probeLines = & $ffmpegExe -hide_banner -loglevel error -f lavfi -i "color=c=black:s=256x256:r=1" `
+        -frames:v 1 -c:v av1_nvenc -f null - 2>&1 | ForEach-Object {
+        if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
+    }
+    $probeOutput = $probeLines -join "`n"
     if ($LASTEXITCODE -eq 0) {
         return "[OK] AV1 NVENC available: AV1 output will be encoded on the GPU."
     }
