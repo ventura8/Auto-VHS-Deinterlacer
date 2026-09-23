@@ -8,6 +8,7 @@ import pytest
 from modules.core.utils import get_duration, get_fps, probe_stream_entry
 from modules.runtime.pipeline import _calculate_audio_sync, _get_audio_filter_args, process_video
 from tests.e2e.conftest import (
+    assert_output_is_decodable,
     check_media_binaries,
     create_correctable_drift_stream,
     create_drift_stream,
@@ -17,11 +18,12 @@ from tests.e2e.conftest import (
 
 
 def _assert_video_properties(out_file: Path, min_fps: float, min_duration: float):
-    """Verify video output file exists with expected fps and duration."""
+    """Verify the output exists, reports the expected timing, and actually decodes."""
     assert out_file.exists()
     assert out_file.stat().st_size > 0
     assert get_fps(str(out_file)) >= min_fps
     assert get_duration(str(out_file)) >= min_duration
+    assert_output_is_decodable(out_file)
 
 
 @pytest.mark.e2e

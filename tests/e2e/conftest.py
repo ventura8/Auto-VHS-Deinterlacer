@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from modules.core.utils import setup_environment
+from modules.core.utils import probe_stream_entry, setup_environment
 
 DEFAULT_TEST_CONFIG = {
     "deinterlace_mode": "QTGMC",
@@ -109,6 +109,45 @@ def create_drift_stream(output_path: Path):
         str(output_path),
     ]
     subprocess.check_call(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+
+
+# seq_level_idx 19 is AV1 level 6.3, the highest the spec defines. Encoders that
+# leave the level unset can stamp 7.x, which decoders such as libaom reject.
+AV1_MAX_DEFINED_SEQ_LEVEL_IDX = 19
+
+
+def _assert_every_frame_decodes(output_path: Path):
+    """Decode the whole file, because a valid header can front a broken bitstream."""
+    decode = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(output_path), "-f", "null", "-"],
+        capture_output=True,
+        check=False,
+        timeout=180,
+    )
+    detail = decode.stderr.decode(errors="replace")[:500]
+    assert decode.returncode == 0, f"decode failed: {detail}"
+    assert not decode.stderr.strip(), f"decode emitted errors: {detail}"
+
+
+def _assert_av1_level_is_defined(output_path: Path):
+    """Reject AV1 levels the spec leaves undefined.
+
+    FFmpeg decodes AV1 with dav1d, which accepts levels libaom refuses, so the
+    decode pass above cannot catch this on its own.
+    """
+    level = probe_stream_entry(output_path, "level")
+    assert level.lstrip("-").isdigit(), f"AV1 stream reported no usable level: {level!r}"
+    assert int(level) <= AV1_MAX_DEFINED_SEQ_LEVEL_IDX, (
+        f"AV1 seq_level_idx {level} exceeds the highest level the spec defines "
+        f"({AV1_MAX_DEFINED_SEQ_LEVEL_IDX}); decoders such as libaom reject it"
+    )
+
+
+def assert_output_is_decodable(output_path: Path):
+    """Assert every frame decodes and any AV1 stream advertises a usable level."""
+    _assert_every_frame_decodes(output_path)
+    if probe_stream_entry(output_path, "codec_name") == "av1":
+        _assert_av1_level_is_defined(output_path)
 
 
 def create_correctable_drift_stream(output_path: Path, video_seconds: int = 20, audio_extra: float = 0.08):
