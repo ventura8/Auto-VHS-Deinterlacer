@@ -6,7 +6,7 @@ Status: pass, all analyzed files are grade A.
 | :--- | :---: | ---: |
 | .github/scripts/coverage_paths.py | A | 77.22 |
 | .github/scripts/enforce_per_file_coverage.py | A | 37.40 |
-| .github/scripts/enforce_radon_grade.py | A | 20.76 |
+| .github/scripts/enforce_radon_grade.py | A | 29.71 |
 | .github/scripts/generate_coverage_summary.py | A | 58.90 |
 | auto_deinterlancer.py | A | 72.67 |
 | modules/__init__.py | A | 100.00 |

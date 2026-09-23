@@ -28,7 +28,7 @@ def _create_parser() -> argparse.ArgumentParser:
 
 def run_radon(targets: list[str]) -> dict[str, list[dict[str, object]]]:
     """Run radon complexity analysis and return the parsed JSON payload."""
-    command = [sys.executable, "-m", "radon", "cc", "--json", *targets]
+    command = [sys.executable, "-m", "radon", "cc", "--json", "--", *targets]
     result = subprocess.run(command, check=False, capture_output=True, text=True)
 
     if result.returncode != 0:
@@ -196,7 +196,7 @@ def _parse_mi_output(output: str, targets: list[str]) -> list[tuple[str, str, fl
 
 def run_radon_mi(targets: list[str]) -> list[tuple[str, str, float]]:
     """Run radon maintainability analysis and parse path, grade, score rows."""
-    command = [sys.executable, "-m", "radon", "mi", "--json", *targets]
+    command = [sys.executable, "-m", "radon", "mi", "--json", "--", *targets]
     result = subprocess.run(command, check=False, capture_output=True, text=True)
 
     if result.returncode != 0:
@@ -272,13 +272,39 @@ def _build_mi_markdown_summary(report: list[tuple[str, str, float]], violations:
     return header + "\n".join(table_lines) + "\n"
 
 
-def _write_summary(path_value: str | None, content: str):
-    """Persist a markdown summary when a target path was provided."""
-    if not path_value:
+def _write_summary(output_path: Path | None, content: str):
+    """Persist a markdown summary when a validated target path was provided."""
+    if output_path is None:
         return
-    output_path = Path(path_value)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(content, encoding="utf-8")
+
+
+def _resolve_summary_path(path_value: str | None) -> Path | None:
+    """Resolve ``--summary-out`` and refuse any path outside the working tree.
+
+    The report is only ever written under the repository (``assets/``), so a
+    path that resolves elsewhere, for example through ``..``, is rejected
+    rather than written.
+    """
+    if not path_value:
+        return None
+    root = Path.cwd().resolve()
+    output_path = (root / path_value).resolve()
+    if not output_path.is_relative_to(root):
+        raise ValueError(f"--summary-out must stay inside {root}: {path_value}")
+    return output_path
+
+
+def _reject_option_like_targets(targets: list[str]):
+    """Refuse targets that radon would read as options instead of paths.
+
+    The commands also pass ``--`` before the targets; this check makes the
+    mistake visible instead of silently analysing a file named like a flag.
+    """
+    option_like = [target for target in targets if target.startswith("-")]
+    if option_like:
+        raise ValueError(f"targets must be paths, not options: {', '.join(option_like)}")
 
 
 def _resolve_targets(argv: list[str]) -> tuple[list[str], list[str]]:
@@ -316,18 +342,32 @@ def _print_mi_violations(violations: list[tuple[str, str, float]]):
         print(f"  - {path} -> {grade} ({score:.2f})")
 
 
+def _prepare_run(requested: list[str], summary_out: str | None) -> tuple[int, list[str], Path | None]:
+    """Validate the CLI arguments; a non-zero status means exit with that code."""
+    try:
+        _reject_option_like_targets(requested)
+        summary_path = _resolve_summary_path(summary_out)
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 2, [], None
+    targets, missing_targets = _resolve_targets(requested)
+    if missing_targets:
+        _print_missing_targets(missing_targets)
+        return 2, [], None
+    return 0, targets, summary_path
+
+
 def main() -> int:
     """Run the radon gate CLI and return the process exit code."""
     args = _create_parser().parse_args()
-    targets, missing_targets = _resolve_targets(args.targets)
-    if missing_targets:
-        _print_missing_targets(missing_targets)
-        return 2
+    status, targets, summary_path = _prepare_run(args.targets, args.summary_out)
+    if status:
+        return status
 
     if args.metric == "mi":
         report = run_radon_mi(targets)
         violations = _collect_mi_violations(report)
-        _write_summary(args.summary_out, _build_mi_markdown_summary(report, violations))
+        _write_summary(summary_path, _build_mi_markdown_summary(report, violations))
         if violations:
             _print_mi_violations(violations)
             return 1
@@ -337,7 +377,7 @@ def main() -> int:
 
     report = run_radon(targets)
     violations = collect_violations(report)
-    _write_summary(args.summary_out, _build_markdown_summary(report, violations))
+    _write_summary(summary_path, _build_markdown_summary(report, violations))
     if violations:
         _print_violations(violations)
         return 1
