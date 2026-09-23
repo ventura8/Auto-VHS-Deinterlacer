@@ -24,14 +24,15 @@
 - `.\.VENV\Scripts\python.exe -m pylint auto_deinterlancer.py`
   `modules .github/scripts`
 - `.\.VENV\Scripts\python.exe -m pytest -o addopts=`
-- `bash tools/run_sonar_scan.sh` (needs `SONAR_TOKEN`; see `docs/SONARQUBE.md`)
+- `./tools/run_sonar_scan.sh` (Bash only - Git Bash or WSL on Windows; needs
+  `SONAR_TOKEN`; see `docs/SONARQUBE.md`)
 - `.\run_pipeline_localy.ps1`
 
 ## Rules
 
 - Do not add `# noqa`, `pylint: disable` or `# NOSONAR` markers to bypass
-  failures, and do not resolve SonarQube issues as "Won't fix" instead of
-  fixing them.
+  failures, and do not resolve SonarQube issues as "Won't fix" or
+  "False positive" instead of fixing them.
 - Do not ignore test failures that are directly caused by the code you changed.
 - Keep Windows path handling explicit when a file path is part of the logic.
 - Maintain coverage above 90% for every Python module and above 90% for

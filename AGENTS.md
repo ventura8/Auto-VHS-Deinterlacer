@@ -127,14 +127,18 @@ audio-video synchronization.
 
 1. **SonarQube Cloud Analysis** (optional locally, enforced in CI):
 
-   ```powershell
-   $env:SONAR_TOKEN = "<your-token>"
-   bash tools/run_sonar_scan.sh
+   The helper is a Bash script, so on Windows run it from Git Bash or WSL
+   rather than PowerShell:
+
+   ```bash
+   export SONAR_TOKEN="<your-token>"
+   ./tools/run_sonar_scan.sh
    ```
 
    See [SonarQube Analysis](docs/SONARQUBE.md). CI runs this automatically
    and fails the build when the quality gate fails; the step is skipped with
-   a warning when `SONAR_TOKEN` is absent, so fork pull requests still pass.
+   a warning when `SONAR_TOKEN` is absent, so a missing token does not block
+   fork pull requests. Every other CI check still applies to them.
 
 1. **Full Automated Local Pipeline**:
 
