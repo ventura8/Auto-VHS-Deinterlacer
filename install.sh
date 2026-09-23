@@ -628,6 +628,141 @@ else
 fi
 
 # ------------------------------------------------------------------------------
+# 6b. NVENC (NVIDIA hardware encoding)
+# ------------------------------------------------------------------------------
+# FFmpeg's av1_nvenc needs three things: a GPU whose NVENC block can encode AV1
+# (RTX 40 or 50 series; RTX 30 and older have NVENC but no AV1 encoder), the
+# NVIDIA kernel driver, and the driver's userspace encode library
+# libnvidia-encode.so.1. The bundled FFmpeg already carries NVENC support.
+# The kernel driver is left to the user - it means a kernel module and usually
+# a reboot - but the userspace library is a separate package on several
+# distros (Ubuntu's headless and server driver flavours omit it), so it is
+# installed here when the driver is present without it. Set AVD_SKIP_NVENC=1
+# to skip this step.
+
+# Usage: linux_distro_family  -> prints debian | fedora | arch, or nothing.
+linux_distro_family() {
+    if [ -f /etc/debian_version ]; then
+        echo "debian"
+    elif [ -f /etc/fedora-release ]; then
+        echo "fedora"
+    elif [ -f /etc/arch-release ]; then
+        echo "arch"
+    fi
+}
+
+# Usage: nvenc_library_package <family> <driver_version>
+#   -> prints the package providing libnvidia-encode.so.1, or nothing if unknown.
+# Debian and Ubuntu version the package by driver branch, so it must match the
+# running driver exactly or apt would pull in a second driver stack.
+nvenc_library_package() {
+    case "$1" in
+        debian) echo "libnvidia-encode-${2%%.*}" ;;
+        fedora) echo "xorg-x11-drv-nvidia-cuda-libs" ;;
+        arch) echo "nvidia-utils" ;;
+    esac
+}
+
+# Usage: nvenc_library_present  -> succeeds when libnvidia-encode.so.1 is loadable.
+# ldconfig's output is captured first: piping it into `grep -q` under pipefail
+# can fail on SIGPIPE even when the library is listed.
+nvenc_library_present() {
+    local ldconfig_bin libs
+    ldconfig_bin="$(command -v ldconfig || echo /sbin/ldconfig)"
+    libs="$("$ldconfig_bin" -p 2>/dev/null || true)"
+    case "$libs" in
+        *"libnvidia-encode.so.1"*) return 0 ;;
+    esac
+    return 1
+}
+
+# Usage: install_nvenc_package <family> <package> <sudo-or-empty>
+install_nvenc_package() {
+    case "$1" in
+        debian) $3 apt-get update -qq && $3 apt-get install -y --no-install-recommends "$2" ;;
+        fedora) $3 dnf install -y "$2" ;;
+        arch) $3 pacman -S --needed --noconfirm "$2" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Usage: report_av1_nvenc <ffmpeg> [driver_version]
+#   -> says whether AV1 output will use the GPU, and why not when it will not.
+# Mirrors modules/core/utils.py:has_av1_nvenc_capability, which encodes one real
+# frame: the encoder being listed proves nothing, since FFmpeg lists av1_nvenc
+# on GPUs that cannot run it and on drivers too old for its NVENC API.
+report_av1_nvenc() {
+    local probe needed
+    if probe="$("$1" -hide_banner -loglevel error -f lavfi -i color=c=black:s=256x256:r=1 \
+        -frames:v 1 -c:v av1_nvenc -f null - 2>&1)"; then
+        echo "[OK] AV1 NVENC available: AV1 output will be encoded on the GPU."
+        return 0
+    fi
+    case "$probe" in
+        *"required nvenc API version"*)
+            # The FFmpeg build was compiled against a newer NVENC SDK than the
+            # driver implements, which blocks every NVENC encoder, not just AV1.
+            # FFmpeg names the minimum driver itself; report it verbatim.
+            needed="${probe##*minimum required Nvidia driver for nvenc is }"
+            [ "$needed" = "$probe" ] && needed="a newer release" || needed="${needed%% *} or newer"
+            echo "[WARN] NVIDIA driver ${2:-(unknown)} is too old for this FFmpeg's NVENC; it needs $needed."
+            echo "       Update the NVIDIA driver and reboot to enable GPU encoding." ;;
+        *"No capable devices"*)
+            echo "[INFO] This GPU has NVENC but no AV1 encoder (AV1 NVENC needs an RTX 40 or 50 series GPU)." ;;
+        *)
+            echo "[WARN] AV1 NVENC probe failed: ${probe%%$'\n'*}" ;;
+    esac
+    echo "       AV1 output will use the CPU encoder instead; ProRes output is unaffected."
+}
+
+# Usage: ensure_nvenc_runtime <ffmpeg>
+# Never fails the install: every outcome here only decides GPU versus CPU AV1.
+ensure_nvenc_runtime() {
+    local driver family pkg sudo_cmd=""
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+        echo "[INFO] No NVIDIA driver found; NVENC unavailable. AV1 output will use the CPU encoder."
+        return 0
+    fi
+    driver="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -n1 || true)"
+    if [ -z "$driver" ]; then
+        echo "[WARN] nvidia-smi is present but reported no GPU; the NVIDIA driver may not be loaded."
+        return 0
+    fi
+    if ! nvenc_library_present; then
+        family="$(linux_distro_family)"
+        pkg="$(nvenc_library_package "$family" "$driver")"
+        if [ -z "$pkg" ]; then
+            echo "[WARN] NVIDIA driver $driver has no libnvidia-encode.so.1 and this distro is not"
+            echo "       recognised; install its NVENC library manually to enable GPU encoding."
+        else
+            echo "[INFO] NVIDIA driver $driver is missing its NVENC library; installing $pkg..."
+            if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+                sudo_cmd="sudo"
+            fi
+            install_nvenc_package "$family" "$pkg" "$sudo_cmd" \
+                || echo "[WARN] Could not install $pkg; NVENC stays unavailable."
+        fi
+    fi
+    report_av1_nvenc "$1" "$driver"
+}
+
+if [ "${AVD_SKIP_NVENC:-0}" = "1" ]; then
+    echo "[INFO] AVD_SKIP_NVENC=1 set; skipping the NVENC check."
+elif [ "$OS_TYPE" = "Darwin" ]; then
+    echo "[INFO] macOS has no NVIDIA driver support; AV1 output will use the CPU encoder."
+else
+    echo ""
+    echo "[INFO] Checking NVIDIA NVENC hardware encoding..."
+    if [ -x "$VENV_DIR/bin/ffmpeg" ]; then
+        ensure_nvenc_runtime "$VENV_DIR/bin/ffmpeg"
+    elif command -v ffmpeg >/dev/null 2>&1; then
+        ensure_nvenc_runtime "$(command -v ffmpeg)"
+    else
+        echo "[WARN] No FFmpeg found to probe NVENC with; skipping the NVENC check."
+    fi
+fi
+
+# ------------------------------------------------------------------------------
 # 7. Check System Media Binaries (FFmpeg & VapourSynth)
 # ------------------------------------------------------------------------------
 echo ""
