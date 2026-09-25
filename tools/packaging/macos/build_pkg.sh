@@ -23,7 +23,7 @@ RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 SCRIPTS_DIR="${BUILD_ROOT}/scripts"
 
 ARCH_LABEL="AppleSilicon"
-if [ "$ARCH" = "x86_64" ]; then
+if [[ "$ARCH" = "x86_64" ]]; then
     ARCH_LABEL="Intel"
 fi
 
@@ -111,7 +111,7 @@ APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RESOURCES_DIR="${APP_DIR}/Resources"
 cd "${RESOURCES_DIR}"
 
-if [ ! -f ".venv/bin/python" ] && [ ! -f ".VENV/bin/python" ]; then
+if [[ ! -f ".venv/bin/python" && ! -f ".VENV/bin/python" ]]; then
     echo "[INFO] Virtual environment not found. Bootstrapping Auto-VHS-Deinterlacer..."
     "${RESOURCES_DIR}/install.sh"
 fi

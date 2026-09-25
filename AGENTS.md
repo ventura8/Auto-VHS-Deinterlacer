@@ -12,7 +12,7 @@ models for audio separation, hardware-adaptive threading, and
 audio-video synchronization.
 
 - **Version single source of truth**: Pinned in `pyproject.toml`
-  (`[project].version`, currently `1.1.5`).
+  (`[project].version`, currently `1.1.6`).
 - **Runtime Environment**: Windows-first on Python 3.12 (CPython
   64-bit) with virtualenv located at `.VENV`.
 
