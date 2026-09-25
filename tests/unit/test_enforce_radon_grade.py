@@ -2,7 +2,8 @@
 
 SonarCloud's first analysis of main flagged enforce_radon_grade.py: targets
 flowed straight into the radon command, where one starting with "-" would be
-read as an option, and --summary-out was written wherever it pointed.
+read as an option, and --summary-out was written wherever it pointed. Both
+targets and --summary-out must now resolve inside the working tree.
 """
 
 import runpy
@@ -56,6 +57,27 @@ def test_no_summary_path_means_no_summary():
     assert _load_radon_gate()["_resolve_summary_path"](None) is None
 
 
+def test_targets_inside_the_working_tree_become_relative_posix_paths(tmp_path, monkeypatch):
+    """Targets are handed to radon relative to the working tree, whatever form they arrived in."""
+    (tmp_path / "modules").mkdir()
+    monkeypatch.chdir(tmp_path)
+    confine = _load_radon_gate()["_confine_targets"]
+
+    assert confine(["modules", "./modules/../modules", str(tmp_path / "modules"), "."]) == ["modules", "modules", "modules", "."]
+
+
+@pytest.mark.parametrize("target", ["..", "../other", "modules/../../other"])
+def test_targets_escaping_the_working_tree_are_rejected(tmp_path, monkeypatch, target):
+    """A target that climbs out of the working tree is refused before radon runs."""
+    work = tmp_path / "repo"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    confine = _load_radon_gate()["_confine_targets"]
+
+    with pytest.raises(ValueError, match="targets must stay inside"):
+        confine(["modules", target])
+
+
 def test_option_like_targets_are_rejected():
     """A target that radon would parse as an option is refused, not analysed."""
     reject = _load_radon_gate()["_reject_option_like_targets"]
@@ -92,4 +114,22 @@ def test_prepare_run_stops_with_status_two_on_bad_arguments(tmp_path, monkeypatc
 
     assert prepare(["-x"], None)[0] == 2
     assert prepare(["."], "../escape.md")[0] == 2
-    assert "must stay inside" in capsys.readouterr().err
+    assert "--summary-out must stay inside" in capsys.readouterr().err
+
+
+def test_prepare_run_stops_with_status_two_on_an_escaping_target(tmp_path, monkeypatch, capsys):
+    """A target outside the working tree exits with status 2 and says why."""
+    monkeypatch.chdir(tmp_path)
+    prepare = _load_radon_gate()["_prepare_run"]
+
+    assert prepare([".."], None)[0] == 2
+    assert "targets must stay inside" in capsys.readouterr().err
+
+
+def test_prepare_run_hands_radon_confined_targets(tmp_path, monkeypatch):
+    """Accepted targets reach radon in their working-tree-relative form."""
+    (tmp_path / "modules").mkdir()
+    monkeypatch.chdir(tmp_path)
+    prepare = _load_radon_gate()["_prepare_run"]
+
+    assert prepare([str(tmp_path / "modules")], "assets/radon.md") == (0, ["modules"], tmp_path / "assets" / "radon.md")

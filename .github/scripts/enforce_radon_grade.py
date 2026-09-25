@@ -280,20 +280,31 @@ def _write_summary(output_path: Path | None, content: str):
     output_path.write_text(content, encoding="utf-8")
 
 
-def _resolve_summary_path(path_value: str | None) -> Path | None:
-    """Resolve ``--summary-out`` and refuse any path outside the working tree.
+def _confine_to_working_tree(path_value: str, label: str) -> Path:
+    """Resolve a command-line path and refuse it when it leaves the working tree.
 
-    The report is only ever written under the repository (``assets/``), so a
-    path that resolves elsewhere, for example through ``..``, is rejected
-    rather than written.
+    CI and both local pipelines run the gate from the repository root, so any
+    path that resolves elsewhere, through ``..``, an absolute path or a
+    symlink, is rejected rather than read or written.
     """
+    root = Path.cwd().resolve()
+    resolved = (root / path_value).resolve()
+    if not resolved.is_relative_to(root):
+        raise ValueError(f"{label} must stay inside {root}: {path_value}")
+    return resolved
+
+
+def _resolve_summary_path(path_value: str | None) -> Path | None:
+    """Resolve ``--summary-out``, which is only ever written under ``assets/``."""
     if not path_value:
         return None
+    return _confine_to_working_tree(path_value, "--summary-out")
+
+
+def _confine_targets(targets: list[str]) -> list[str]:
+    """Return the targets as working-tree-relative POSIX paths radon can analyse."""
     root = Path.cwd().resolve()
-    output_path = (root / path_value).resolve()
-    if not output_path.is_relative_to(root):
-        raise ValueError(f"--summary-out must stay inside {root}: {path_value}")
-    return output_path
+    return [_confine_to_working_tree(target, "targets").relative_to(root).as_posix() for target in targets]
 
 
 def _reject_option_like_targets(targets: list[str]):
@@ -346,11 +357,12 @@ def _prepare_run(requested: list[str], summary_out: str | None) -> tuple[int, li
     """Validate the CLI arguments; a non-zero status means exit with that code."""
     try:
         _reject_option_like_targets(requested)
+        confined = _confine_targets(requested)
         summary_path = _resolve_summary_path(summary_out)
     except ValueError as error:
         print(f"Error: {error}", file=sys.stderr)
         return 2, [], None
-    targets, missing_targets = _resolve_targets(requested)
+    targets, missing_targets = _resolve_targets(confined)
     if missing_targets:
         _print_missing_targets(missing_targets)
         return 2, [], None

@@ -6,7 +6,7 @@ Status: pass, all analyzed files are grade A.
 | :--- | :---: | ---: |
 | .github/scripts/coverage_paths.py | A | 77.22 |
 | .github/scripts/enforce_per_file_coverage.py | A | 37.40 |
-| .github/scripts/enforce_radon_grade.py | A | 29.71 |
+| .github/scripts/enforce_radon_grade.py | A | 29.18 |
 | .github/scripts/generate_coverage_summary.py | A | 58.90 |
 | auto_deinterlancer.py | A | 72.67 |
 | modules/__init__.py | A | 100.00 |
@@ -45,6 +45,7 @@ Status: pass, all analyzed files are grade A.
 | tests/unit/test_config_validation.py | A | 26.75 |
 | tests/unit/test_coverage_paths.py | A | 56.15 |
 | tests/unit/test_enforce_per_file_coverage.py | A | 56.44 |
+| tests/unit/test_enforce_radon_grade.py | A | 53.52 |
 | tests/unit/test_generate_coverage_summary.py | A | 44.51 |
 | tests/unit/test_install_nvenc.py | A | 50.40 |
 | tests/unit/test_install_ps1_nvenc.py | A | 67.45 |
