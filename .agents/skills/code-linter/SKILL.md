@@ -91,6 +91,11 @@ Compute Cyclomatic Complexity and Maintainability Index:
 .\.VENV\Scripts\python.exe -m poetry run radon hal auto_deinterlancer.py modules tests .github/scripts
 ```
 
+Run `enforce_radon_grade.py` from the repository root: its targets and
+`--summary-out` path must resolve inside the working directory, and a path
+that escapes it (`..`, an absolute path elsewhere, a symlink) or a target that
+looks like an option (`-x`) stops the run with exit status 2.
+
 ### 7. Markdown Formatting & Linting
 
 ```powershell
