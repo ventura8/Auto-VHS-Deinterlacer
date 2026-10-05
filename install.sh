@@ -318,14 +318,14 @@ EOF
                 # The installer never enables third-party repos or swaps the
                 # system FFmpeg stack on its own.
                 $SUDO dnf install -y ffms2 >/dev/null 2>&1 || true
-                if ! rpm -q ffmpeg-libs >/dev/null 2>&1; then
-                    # Fedora's libavcodec-free carries no H.264 decoder, so ffms2
-                    # linked against it cannot open the most common capture format.
-                    echo "[WARN] Fedora's ffmpeg-free lacks H.264 decoding. For full codec support,"
-                    echo "       enable RPM Fusion yourself (https://rpmfusion.org/Configuration) and run:"
-                    echo "         sudo dnf swap ffmpeg-free ffmpeg --allowerasing"
-                fi
             fi
+        fi
+        if [ -f /etc/fedora-release ] && ! rpm -q ffmpeg-libs >/dev/null 2>&1; then
+            # Fedora's libavcodec-free carries no H.264 decoder, so ffms2
+            # linked against it cannot open the most common capture format.
+            echo "[WARN] Fedora's ffmpeg-free lacks H.264 decoding. For full codec support,"
+            echo "       enable RPM Fusion yourself (https://rpmfusion.org/Configuration) and run:"
+            echo "         sudo dnf swap ffmpeg-free ffmpeg --allowerasing"
         fi
         for _p in /usr/lib/*/libffms2.so* /usr/lib/libffms2.so* /usr/lib64/libffms2.so* /usr/local/lib/*/libffms2.so* /usr/local/lib/libffms2.so*; do
             [ -f "$_p" ] || continue

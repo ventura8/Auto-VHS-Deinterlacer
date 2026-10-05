@@ -98,9 +98,10 @@ Download the official standalone application / package for your operating system
 - VapourSynth: on Windows `install.ps1` pulls the plugin DLLs via `vsrepo`; on
   Linux/macOS `install.sh` installs the `vapoursynth` wheel (bundles `vspipe`)
   and assembles the QTGMC plugin stack — `ffms2` is copied from the installed
-  `libffms2` system library when present (on Fedora, `install.sh` installs `ffms2`
-  only from already-enabled repositories and never adds third-party repos or
-  replaces the system FFmpeg; Fedora's patent-free `libavcodec-free` has no
+  `libffms2` system library when present (on Fedora, `install.sh` tries `dnf install ffms2`
+  from already-enabled repositories only, falls back to building `ffms2` from
+  upstream GitHub, and never adds third-party repos or replaces the system
+  FFmpeg; Fedora's patent-free `libavcodec-free` has no
   H.264 decoder, so for H.264 captures enable
   [RPM Fusion](https://rpmfusion.org/Configuration) yourself and run
   `sudo dnf swap ffmpeg-free ffmpeg --allowerasing`), and BestSource, fmtconv, mvtools,
