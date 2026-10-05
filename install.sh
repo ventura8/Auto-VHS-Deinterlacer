@@ -314,16 +314,18 @@ EOF
             elif [ -f /etc/arch-release ]; then
                 $SUDO pacman -S --needed --noconfirm ffms2 >/dev/null 2>&1 || true
             elif [ -f /etc/fedora-release ]; then
-                # Fedora's own libavcodec-free carries no H.264 decoder, so ffms2
-                # linked against it cannot open the most common capture format.
-                # RPM Fusion free ships the full FFmpeg as ffmpeg-libs; asking for
-                # it explicitly is required, because "dnf install ffms2" alone is
-                # satisfied by the -free libraries. --allowerasing swaps them out.
-                if ! rpm -q rpmfusion-free-release >/dev/null 2>&1; then
-                    $SUDO dnf install -y "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" >/dev/null 2>&1 || true
-                fi
-                $SUDO dnf install -y --allowerasing ffmpeg-libs ffms2 >/dev/null 2>&1 || true
+                # Install ffms2 only from repositories the user already trusts.
+                # The installer never enables third-party repos or swaps the
+                # system FFmpeg stack on its own.
+                $SUDO dnf install -y ffms2 >/dev/null 2>&1 || true
             fi
+        fi
+        if [ -f /etc/fedora-release ] && ! rpm -q ffmpeg-libs >/dev/null 2>&1; then
+            # Fedora's libavcodec-free carries no H.264 decoder, so ffms2
+            # linked against it cannot open the most common capture format.
+            echo "[WARN] Fedora's ffmpeg-free lacks H.264 decoding. For full codec support,"
+            echo "       enable RPM Fusion yourself (https://rpmfusion.org/Configuration) and run:"
+            echo "         sudo dnf swap ffmpeg-free ffmpeg --allowerasing"
         fi
         for _p in /usr/lib/*/libffms2.so* /usr/lib/libffms2.so* /usr/lib64/libffms2.so* /usr/local/lib/*/libffms2.so* /usr/local/lib/libffms2.so*; do
             [ -f "$_p" ] || continue
