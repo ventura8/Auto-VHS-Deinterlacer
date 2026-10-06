@@ -416,14 +416,11 @@ def _run_encoding_pipeline(vspipe_cmd, ffmpeg_cmd, duration_sec, offset_sec: flo
         total_ts = _format_total_timestamp(duration_sec)
         vspipe_env = _prepare_vspipe_env(vspipe_cmd)
 
-        with subprocess.Popen(vspipe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=vspipe_env) as p_vspipe:
-            with subprocess.Popen(
-                ffmpeg_cmd,
-                stdin=p_vspipe.stdout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            ) as p_ffmpeg:
-                stderr_lines = _collect_pipeline_stderr(p_vspipe, p_ffmpeg, duration_sec, total_ts, offset_sec)
+        with (
+            subprocess.Popen(vspipe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=vspipe_env) as p_vspipe,
+            subprocess.Popen(ffmpeg_cmd, stdin=p_vspipe.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as p_ffmpeg,
+        ):
+            stderr_lines = _collect_pipeline_stderr(p_vspipe, p_ffmpeg, duration_sec, total_ts, offset_sec)
 
         if _pipeline_succeeded(p_ffmpeg, p_vspipe):
             return True

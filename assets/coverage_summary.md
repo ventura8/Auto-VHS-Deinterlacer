@@ -1,8 +1,8 @@
 ## 📊 Code Coverage Report
 
-**Total Coverage:** 95.48%
-**Branch Coverage:** 87.18%
-**Generated:** 2026-10-05 14:08:44
+**Total Coverage:** 95.47%
+**Branch Coverage:** 87.14%
+**Generated:** 2026-10-06 09:53:50
 
 | File | Coverage | Branches |
 | :--- | :---: | :---: |
@@ -16,6 +16,6 @@
 | modules/runtime/encoders.py | 100.0% | 100.0% |
 | modules/runtime/inputs.py | 98.7% | 84.6% |
 | modules/runtime/pipeline.py | 97.8% | 91.0% |
-| modules/runtime/vspipe.py | 94.5% | 83.3% |
+| modules/runtime/vspipe.py | 94.4% | 83.0% |
 | modules/runtime/vspipe_native.py | 98.4% | 93.8% |
 | modules/runtime/workspace.py | 100.0% | 100.0% |
