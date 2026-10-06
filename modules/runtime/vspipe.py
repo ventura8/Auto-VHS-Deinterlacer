@@ -107,22 +107,28 @@ def _append_vpy_path(lines, path_value):
 def _get_vpy_header(venv_root, portable_root, site_paths, current_root):
     """Generates the VPY script header with imports and paths."""
     lines = ["import sys", "import os", f"sys.path.insert(0, {_to_python_path_literal(current_root)})"]
-    for p in site_paths:
-        lines.append(f"sys.path.append({_to_python_path_literal(p)})")
+    lines.extend(f"sys.path.append({_to_python_path_literal(p)})" for p in site_paths)
 
-    # Ensure portable VS scripts (havsfunc, mvsfunc) are findable
-    lines.append(f"sys.path.append({_to_python_path_literal(portable_root)})")
-
-    lines.append("_DLL_DIRECTORY_HANDLES = []")
-    lines.append("if hasattr(os, 'add_dll_directory'):")
-    lines.append(f"    try: _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory({_to_python_path_literal(portable_root)}))")
-    lines.append("    except: pass")
+    lines.extend(
+        [
+            # Ensure portable VS scripts (havsfunc, mvsfunc) are findable
+            f"sys.path.append({_to_python_path_literal(portable_root)})",
+            "_DLL_DIRECTORY_HANDLES = []",
+            "if hasattr(os, 'add_dll_directory'):",
+            f"    try: _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory({_to_python_path_literal(portable_root)}))",
+            "    except: pass",
+        ]
+    )
 
     plugin_dir_check = _resolve_vspipe_plugin_dir(venv_root)
 
     if os.path.exists(plugin_dir_check):
-        lines.append(f"    try: _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory({_to_python_path_literal(plugin_dir_check)}))")
-        lines.append("    except: pass")
+        lines.extend(
+            [
+                f"    try: _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory({_to_python_path_literal(plugin_dir_check)}))",
+                "    except: pass",
+            ]
+        )
 
     _append_vpy_path(lines, f"{current_root}/mvsfunc")
 
