@@ -393,6 +393,10 @@ LINUX_TAR_SHA256 = {
     "linux64": "c67af56466837059601a1abd22109b7b771eeea137c9ff4b1db0bde66192dbc6",
     "linuxarm64": "100182dfa879b37caa327b00f7020f04e2dd95c282e171efb92bff262259d463",
 }
+# Pinned VapourSynth API3 compatibility headers and NNEDI3CL commit for GPU OpenCL QTGMC.
+VAPOURSYNTH_H_SHA256 = "0983c937cd369b7e1766913edd3c859ea1f93a79671579729f24eb90a91ce910"
+VSHELPER_H_SHA256 = "11e2c4977127632aa0fb84c67d5d7eb7244764c52a94500797d4a3cac013e382"
+NNEDI3CL_COMMIT = "eb2a810c0b7dfdd3ad908a1bdc07d6daab64eb57"
 
 
 def _read_install_sh() -> str:
@@ -418,6 +422,7 @@ def test_install_sh_verifies_download_hashes():
     install_sh_content = _read_install_sh()
     darwin_fn = _extract_shell_function(install_sh_content, "install_darwin_ffmpeg")
     linux_fn = _extract_shell_function(install_sh_content, "install_linux_ffmpeg")
+    nnedi3cl_fn = _extract_shell_function(install_sh_content, "build_nnedi3cl")
 
     # (haystack, fragment, must_be_present) triples; each platform branch of the
     # installer must route through its verified function, which must pin the
@@ -429,8 +434,12 @@ def test_install_sh_verifies_download_hashes():
         (install_sh_content, "HAVSFUNC_EXPECTED_SHA256", True),
         (install_sh_content, f'FFMPEG_ZIP_EXPECTED_SHA256="{FFMPEG_ZIP_SHA256}"', True),
         (install_sh_content, f'FFPROBE_ZIP_EXPECTED_SHA256="{FFPROBE_ZIP_SHA256}"', True),
+        (install_sh_content, f'VAPOURSYNTH_H_EXPECTED_SHA256="{VAPOURSYNTH_H_SHA256}"', True),
+        (install_sh_content, f'VSHELPER_H_EXPECTED_SHA256="{VSHELPER_H_SHA256}"', True),
+        (install_sh_content, f'NNEDI3CL_COMMIT="{NNEDI3CL_COMMIT}"', True),
         (install_sh_content, 'install_darwin_ffmpeg "$FF_TMP"', True),
         (install_sh_content, 'install_linux_ffmpeg "$FF_TMP" "$(uname -m)"', True),
+        (install_sh_content, 'build_nnedi3cl "$VS_BUILD_DIR" "$NATIVE_FILE" "$VS_PLUGIN_DIR"', True),
         (install_sh_content, "extractall", False),
         (darwin_fn, 'sha256_of "$_ff_tmp/${tool}.zip"', True),
         (darwin_fn, 'rm -f "$_ff_tmp/${tool}.zip"', True),
@@ -441,6 +450,9 @@ def test_install_sh_verifies_download_hashes():
         (linux_fn, 'rm -f "$_ff_tmp/ff.tar.xz"', True),
         (linux_fn, "releases/download/latest", False),
         (linux_fn, "checksums.sha256", False),
+        (nnedi3cl_fn, 'sha256_of "$_hdr_path"', True),
+        (nnedi3cl_fn, 'rm -f "$_hdr_path"', True),
+        (nnedi3cl_fn, 'git -C "$_d" checkout -q "$NNEDI3CL_COMMIT"', True),
     )
     violations = [fragment for haystack, fragment, present in rules if (fragment in haystack) != present]
     assert violations == []

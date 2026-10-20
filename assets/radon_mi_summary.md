@@ -47,13 +47,14 @@ Status: pass, all analyzed files are grade A.
 | tests/unit/test_enforce_per_file_coverage.py | A | 56.44 |
 | tests/unit/test_enforce_radon_grade.py | A | 53.52 |
 | tests/unit/test_generate_coverage_summary.py | A | 44.51 |
+| tests/unit/test_install_nnedi3cl.py | A | 44.75 |
 | tests/unit/test_install_nvenc.py | A | 50.40 |
 | tests/unit/test_install_ps1_nvenc.py | A | 67.45 |
 | tests/unit/test_pipeline_runner.py | A | 42.90 |
 | tests/unit/test_plugin_discovery.py | A | 68.68 |
 | tests/unit/test_progress_reporting.py | A | 86.35 |
 | tests/unit/test_qtgmc_fallback.py | A | 61.32 |
-| tests/unit/test_runtime_helpers.py | A | 21.28 |
+| tests/unit/test_runtime_helpers.py | A | 21.20 |
 | tests/unit/test_version_reporting.py | A | 54.09 |
 | tests/unit/test_vspipe_environment.py | A | 55.51 |
 | tests/unit/test_windows_vspipe_environment.py | A | 69.45 |
