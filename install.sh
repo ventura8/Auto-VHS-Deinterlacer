@@ -410,6 +410,72 @@ EOF
             || echo "[WARN] [fft3dfilter] unavailable; QTGMC denoise options will fall back to Bob."
     fi
 
+# Download and verify VapourSynth API3 headers, clone NNEDI3CL at a pinned commit,
+# compile with meson/ninja, and stage the plugin.
+# Hashes and commit SHA are pinned to eliminate supply-chain injection attacks
+# from compromised upstream tags (parity with HAVSFUNC_EXPECTED_SHA256).
+build_nnedi3cl() {
+    _build_dir="$1"
+    _native_file="$2"
+    _plugin_dir="$3"
+
+    VAPOURSYNTH_H_EXPECTED_SHA256="0983c937cd369b7e1766913edd3c859ea1f93a79671579729f24eb90a91ce910"
+    VSHELPER_H_EXPECTED_SHA256="11e2c4977127632aa0fb84c67d5d7eb7244764c52a94500797d4a3cac013e382"
+    NNEDI3CL_COMMIT="eb2a810c0b7dfdd3ad908a1bdc07d6daab64eb57"
+
+    echo "   -> [nnedi3cl] building (meson, GPU/OpenCL)..."
+    _d="$_build_dir/nnedi3cl"
+    _api3="$_build_dir/api3"
+    _vs_ver="$("$VENV_PYTHON" -c 'import vapoursynth; print(vapoursynth.core.version_number())' 2>/dev/null || echo "")"
+    if [ "$_vs_ver" != "79" ]; then
+        echo "[WARN] [nnedi3cl] expected VapourSynth R79 for API3 headers, found R${_vs_ver:-?}; skipping GPU plugin."
+        return 1
+    fi
+    mkdir -p "$_api3"
+    _api3_ok=1
+    for hdr in VapourSynth.h VSHelper.h; do
+        case "$hdr" in
+            VapourSynth.h) _expect="$VAPOURSYNTH_H_EXPECTED_SHA256" ;;
+            VSHelper.h)    _expect="$VSHELPER_H_EXPECTED_SHA256" ;;
+        esac
+        _hdr_path="$_api3/$hdr"
+        if ! curl -fsSL "https://raw.githubusercontent.com/vapoursynth/vapoursynth/R${_vs_ver}/include/$hdr" -o "$_hdr_path"; then
+            echo "[WARN] [nnedi3cl] could not download $hdr for R${_vs_ver}; skipping GPU plugin."
+            _api3_ok=0
+            break
+        fi
+        _got="$(sha256_of "$_hdr_path")"
+        if [ "$_got" != "$_expect" ]; then
+            echo "[WARN] [nnedi3cl] $hdr SHA-256 mismatch (expected $_expect, got $_got)."
+            echo "       Refusing to compile with unverified VapourSynth API3 headers."
+            rm -f "$_hdr_path"
+            _api3_ok=0
+            break
+        fi
+    done
+    if [ "$_api3_ok" != 1 ]; then
+        return 1
+    fi
+
+    if git clone https://github.com/HomeOfVapourSynthEvolution/VapourSynth-NNEDI3CL.git "$_d" >/dev/null 2>&1 \
+        && git -C "$_d" checkout -q "$NNEDI3CL_COMMIT" \
+        && [ "$(git -C "$_d" rev-parse HEAD)" = "$NNEDI3CL_COMMIT" ] \
+        && CXXFLAGS="-I$_api3 ${CXXFLAGS:-}" meson setup "$_d/build" "$_d" --native-file "$_native_file" \
+            -Dcpp_std=gnu++14 >"$_d/setup.log" 2>&1 \
+        && ninja -C "$_d/build" >"$_d/build.log" 2>&1; then
+        find "$_d/build" -maxdepth 1 \( -name '*.so' -o -name '*.dylib' \) -exec cp {} "$_plugin_dir/" \;
+        [ -f "$_plugin_dir/nnedi3_weights.bin" ] || cp "$_d/NNEDI3CL/nnedi3_weights.bin" "$_plugin_dir/" 2>/dev/null || true
+        if command -v vs_has >/dev/null 2>&1 && vs_has nnedi3cl; then
+            echo "   -> [nnedi3cl] GPU QTGMC interpolation available."
+        else
+            echo "[WARN] [nnedi3cl] built but did not load; QTGMC stays on CPU."
+        fi
+    else
+        echo "[WARN] [nnedi3cl] build failed; QTGMC will run on CPU (see $_d/setup.log, $_d/build.log)."
+        return 1
+    fi
+}
+
     # nnedi3cl (OPTIONAL, GPU): the OpenCL interpolator QTGMC uses when
     # manual_settings.use_gpu_opencl is on and EdiMode is the default nnedi3.
     # Without it QTGMC silently runs entirely on the CPU. Two quirks make this
@@ -421,30 +487,7 @@ EOF
     #     only expose when __STRICT_ANSI__ is undefined -- so gnu++14, not c++14.
     # Failure here is never fatal: QTGMC falls back to the CPU znedi3 path.
     if ! vs_has nnedi3cl; then
-        echo "   -> [nnedi3cl] building (meson, GPU/OpenCL)..."
-        d="$VS_BUILD_DIR/nnedi3cl"
-        api3="$VS_BUILD_DIR/api3"
-        vs_ver="$("$VENV_PYTHON" -c 'import vapoursynth; print(vapoursynth.core.version_number())' 2>/dev/null || echo "")"
-        mkdir -p "$api3"
-        api3_ok=1
-        for hdr in VapourSynth.h VSHelper.h; do
-            curl -fsSL "https://raw.githubusercontent.com/vapoursynth/vapoursynth/R${vs_ver}/include/$hdr" \
-                -o "$api3/$hdr" || api3_ok=0
-        done
-        if [ "$api3_ok" != 1 ] || [ -z "$vs_ver" ]; then
-            echo "[WARN] [nnedi3cl] could not fetch API3 headers for R${vs_ver:-?}; skipping GPU plugin."
-        elif git clone --depth 1 --recurse-submodules \
-                https://github.com/HomeOfVapourSynthEvolution/VapourSynth-NNEDI3CL.git "$d" >/dev/null 2>&1 \
-            && CXXFLAGS="-I$api3 ${CXXFLAGS:-}" meson setup "$d/build" "$d" --native-file "$NATIVE_FILE" \
-                -Dcpp_std=gnu++14 >"$d/setup.log" 2>&1 \
-            && ninja -C "$d/build" >"$d/build.log" 2>&1; then
-            find "$d/build" -maxdepth 1 \( -name '*.so' -o -name '*.dylib' \) -exec cp {} "$VS_PLUGIN_DIR/" \;
-            [ -f "$VS_PLUGIN_DIR/nnedi3_weights.bin" ] || cp "$d/NNEDI3CL/nnedi3_weights.bin" "$VS_PLUGIN_DIR/" 2>/dev/null || true
-            vs_has nnedi3cl && echo "   -> [nnedi3cl] GPU QTGMC interpolation available." \
-                || echo "[WARN] [nnedi3cl] built but did not load; QTGMC stays on CPU."
-        else
-            echo "[WARN] [nnedi3cl] build failed; QTGMC will run on CPU (see $d/setup.log, $d/build.log)."
-        fi
+        build_nnedi3cl "$VS_BUILD_DIR" "$NATIVE_FILE" "$VS_PLUGIN_DIR" || true
     fi
 
     rm -rf "$VS_BUILD_DIR"
