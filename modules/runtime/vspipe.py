@@ -98,21 +98,45 @@ def _to_python_path_literal(path_value):
     return repr(path_value)
 
 
-def _append_vpy_path(lines, path_value):
-    """Append a sys.path entry only when the path exists."""
-    if os.path.exists(path_value):
-        lines.append(f"sys.path.append({_to_python_path_literal(path_value)})")
+def _collect_trusted_vpy_paths(project_root, site_paths, portable_root):
+    """Return the ordered module search roots the generated script may import from.
+
+    Only the project root, the venv site-packages and the portable VapourSynth
+    folder are trusted. The script's own folder (the per-video workspace next to
+    the source) is deliberately absent: vspipe evaluates the script with that
+    folder as its working directory, and it can hold attacker-planted modules.
+    """
+    trusted = [project_root, *site_paths, portable_root]
+    mvsfunc_root = f"{project_root}/mvsfunc"
+    if os.path.exists(mvsfunc_root):
+        trusted.append(mvsfunc_root)
+    return list(dict.fromkeys(trusted))
 
 
-def _get_vpy_header(venv_root, portable_root, site_paths, current_root):
+def _get_vpy_sys_path_lines(trusted_paths, script_dir):
+    """Return lines that put trusted roots first and drop the script and working folders.
+
+    ``''`` and relative entries resolve against the working directory, which
+    vspipe sets to the script folder, so they are dropped together with any
+    entry that resolves to the script folder or the evaluation working folder.
+    """
+    return [
+        f"_TRUSTED_PATHS = {trusted_paths!r}",
+        f"_UNTRUSTED_DIRS = {{os.path.normcase(os.path.abspath(_d)) for _d in (os.getcwd(), {_to_python_path_literal(script_dir)})}}",
+        "sys.path[:] = _TRUSTED_PATHS + [",
+        "    _p for _p in sys.path",
+        "    if _p and os.path.isabs(_p) and _p not in _TRUSTED_PATHS and os.path.normcase(os.path.abspath(_p)) not in _UNTRUSTED_DIRS",
+        "]",
+    ]
+
+
+def _get_vpy_header(venv_root, portable_root, site_paths, project_root, script_dir):
     """Generates the VPY script header with imports and paths."""
-    lines = ["import sys", "import os", f"sys.path.insert(0, {_to_python_path_literal(current_root)})"]
-    lines.extend(f"sys.path.append({_to_python_path_literal(p)})" for p in site_paths)
+    lines = ["import sys", "import os"]
+    lines.extend(_get_vpy_sys_path_lines(_collect_trusted_vpy_paths(project_root, site_paths, portable_root), script_dir))
 
     lines.extend(
         [
-            # Ensure portable VS scripts (havsfunc, mvsfunc) are findable
-            f"sys.path.append({_to_python_path_literal(portable_root)})",
             "_DLL_DIRECTORY_HANDLES = []",
             "if hasattr(os, 'add_dll_directory'):",
             f"    try: _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory({_to_python_path_literal(portable_root)}))",
@@ -129,8 +153,6 @@ def _get_vpy_header(venv_root, portable_root, site_paths, current_root):
                 "    except: pass",
             ]
         )
-
-    _append_vpy_path(lines, f"{current_root}/mvsfunc")
 
     lines.extend(
         [
@@ -570,14 +592,15 @@ def create_vpy_script(input_file, output_script, _mode, override_settings=None, 
     """Generate a VapourSynth script; ``cache_dir`` receives every source index file."""
     current_settings = override_settings if override_settings else HW_SETTINGS
     safe_input = os.path.abspath(input_file).replace("\\", "/").strip()
-    current_root = os.getcwd().replace("\\", "/").strip()
     base_dir = get_project_root()
+    project_root = base_dir.replace("\\", "/").strip()
     venv_root = resolve_venv_root(base_dir).replace("\\", "/")
 
     site_paths = _get_vpy_site_paths(venv_root)
     portable_root = f"{venv_root}/vs"
 
-    lines = _get_vpy_header(venv_root, portable_root, site_paths, current_root)
+    script_dir = os.path.dirname(os.path.abspath(output_script)).replace("\\", "/")
+    lines = _get_vpy_header(venv_root, portable_root, site_paths, project_root, script_dir)
     _append_runtime_settings(lines, current_settings)
     lines.extend(_get_plugin_loading_lines(venv_root))
 

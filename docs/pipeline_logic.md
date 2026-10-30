@@ -75,7 +75,16 @@ files behind.
   source, and nothing at all is written to the system temp folder.
 - **Resume Capability**: Checks if the final output exists to avoid
   re-processing, and otherwise reuses finished segments from the workspace.
-  Interrupted `*.part.*` files are deleted at every start.
+  Interrupted `*.part.*` files are deleted at every start, and so is anything
+  in the workspace root the pipeline did not create itself (for example a
+  planted `*.py` module or a symlink), because the generated script is
+  evaluated with that folder as its working directory.
+- **Import Isolation**: The generated `restore.vpy` rebuilds `sys.path` with
+  the project root, the venv site-packages and the portable VapourSynth folder
+  first, and drops `''`, relative entries, the script folder and the
+  evaluation working folder, so `havsfunc` and `vapoursynth` always load from
+  the venv and never from the workspace beside the source. The native
+  fallback never adds the script folder to `sys.path` either.
 - **Auto-Cleanup**: The whole workspace folder is deleted as soon as the final
   output is in place, or when a valid output already exists. On failure the
   workspace is kept and the log tells you to re-run the same file to resume.

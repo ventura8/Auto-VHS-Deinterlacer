@@ -9,8 +9,8 @@
 - `modules/runtime/pipeline.py`: main deinterlace and encode orchestration.
 - `modules/runtime/inputs.py`: input discovery from CLI arguments, folder scans, and the interactive prompt.
 - `modules/runtime/encoders.py`: FFmpeg video-encoder argument selection, including the runtime AV1 CPU encoder probe.
-- `modules/runtime/workspace.py`: per-video temp workspace (`<file name>.autovhs-tmp/`), segment plan, resume state, and cleanup.
-- `modules/runtime/vspipe.py`: VapourSynth script generation and `vspipe` metadata queries.
+- `modules/runtime/workspace.py`: per-video temp workspace (`<file name>.autovhs-tmp/`), foreign-entry sweep, segment plan, resume state, and cleanup.
+- `modules/runtime/vspipe.py`: VapourSynth script generation (with a trusted-first `sys.path` header that excludes the workspace) and `vspipe` metadata queries.
 - `modules/runtime/vspipe_native.py`: Python fallback writer for `vspipe`.
 - `tests/unit/`, `tests/integration/`, `tests/native/`: coverage grouped by behavior area.
 - `.github/scripts/generate_coverage_summary.py`: CI coverage report helper.

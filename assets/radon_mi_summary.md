@@ -18,9 +18,9 @@ Status: pass, all analyzed files are grade A.
 | modules/runtime/encoders.py | A | 84.31 |
 | modules/runtime/inputs.py | A | 53.12 |
 | modules/runtime/pipeline.py | A | 19.24 |
-| modules/runtime/vspipe.py | A | 29.42 |
-| modules/runtime/vspipe_native.py | A | 34.12 |
-| modules/runtime/workspace.py | A | 55.46 |
+| modules/runtime/vspipe.py | A | 31.23 |
+| modules/runtime/vspipe_native.py | A | 37.93 |
+| modules/runtime/workspace.py | A | 52.56 |
 | tests/conftest.py | A | 78.95 |
 | tests/e2e/conftest.py | A | 58.91 |
 | tests/e2e/test_dockurr_containers.py | A | 37.72 |
@@ -56,6 +56,7 @@ Status: pass, all analyzed files are grade A.
 | tests/unit/test_qtgmc_fallback.py | A | 61.32 |
 | tests/unit/test_runtime_helpers.py | A | 21.20 |
 | tests/unit/test_version_reporting.py | A | 54.09 |
+| tests/unit/test_vpy_import_isolation.py | A | 43.33 |
 | tests/unit/test_vspipe_environment.py | A | 55.51 |
 | tests/unit/test_windows_vspipe_environment.py | A | 69.45 |
 | tests/unit/test_workspace.py | A | 21.82 |

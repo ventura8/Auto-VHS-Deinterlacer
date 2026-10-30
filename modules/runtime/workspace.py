@@ -12,6 +12,10 @@ extension included, so ``tape.mpg`` and ``tape.mp4`` never share one)::
     state.json             fingerprint of the settings the segments were made with
     <output>_part.<ext>    muxed result before the atomic rename into place
 
+Anything else found in the folder root (for example a planted ``*.py``
+module or a symlink) is deleted at every start, because the generated script
+is evaluated with this folder as its working directory.
+
 The folder is removed once the final output is in place, or when a valid
 output already exists. It is kept on failure or power loss so the next run
 resumes from the last completed segment instead of starting over.
@@ -88,8 +92,53 @@ def remove_partial_files(workspace: VideoWorkspace):
     _unlink_quiet(workspace.concat_list)
 
 
+def _expected_root_names(workspace: VideoWorkspace) -> set[str]:
+    """Return the names the pipeline itself creates in the workspace root."""
+    owned = (
+        workspace.script,
+        workspace.index_dir,
+        workspace.segments_dir,
+        workspace.concat_list,
+        workspace.state_file,
+        workspace.state_file.with_suffix(".json.part"),
+        workspace.output_part,
+    )
+    return {path.name for path in owned}
+
+
+def _remove_entry(path: Path):
+    """Delete one file, symlink or folder, ignoring filesystem errors."""
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        _unlink_quiet(path)
+
+
+def remove_foreign_entries(workspace: VideoWorkspace):
+    """Delete everything in the workspace root that the pipeline did not create.
+
+    The workspace sits next to the source, so it can arrive pre-populated (a
+    shared folder, an archive, a USB stick). Anything unexpected there, such as
+    a planted ``havsfunc.py`` or a symlink standing in for one of the owned
+    folders, is removed before the generated script is evaluated in it.
+    """
+    if workspace.root.is_symlink():
+        _unlink_quiet(workspace.root)
+    if not workspace.root.is_dir():
+        return
+    expected = _expected_root_names(workspace)
+    for entry in _foreign_entries(workspace.root, expected):
+        _remove_entry(entry)
+
+
+def _foreign_entries(root: Path, expected: set[str]) -> list[Path]:
+    """Return root entries that are symlinks or not one of the expected names."""
+    return [entry for entry in root.iterdir() if entry.name not in expected or entry.is_symlink()]
+
+
 def prepare_workspace(workspace: VideoWorkspace):
-    """Create the workspace layout and remove interrupted partial files."""
+    """Create the workspace layout and remove foreign and interrupted partial files."""
+    remove_foreign_entries(workspace)
     for folder in (workspace.root, workspace.index_dir, workspace.segments_dir):
         folder.mkdir(parents=True, exist_ok=True)
     remove_partial_files(workspace)
@@ -300,6 +349,7 @@ __all__ = [
     "get_workspace_root",
     "build_workspace",
     "prepare_workspace",
+    "remove_foreign_entries",
     "remove_partial_files",
     "remove_workspace",
     "clear_segments",

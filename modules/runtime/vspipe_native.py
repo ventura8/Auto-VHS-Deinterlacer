@@ -222,8 +222,12 @@ def _ensure_script_exists(script_path):
 
 
 def _run_vpy_script(script_path):
-    """Execute the VPY script in an isolated runpy context."""
-    sys.path.append(os.path.dirname(os.path.abspath(script_path)))
+    """Execute the VPY script in an isolated runpy context.
+
+    The script folder is never added to ``sys.path``: it is the per-video
+    workspace next to the source, and modules planted there must not shadow
+    the venv copies the script imports.
+    """
     try:
         runpy.run_path(script_path, run_name="__vapoursynth_script__")
     except (OSError, RuntimeError, ValueError) as error:
