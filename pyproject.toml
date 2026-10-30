@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "auto-vhs-deinterlacer"
-version = "1.1.9"
+version = "1.1.10"
 description = "Automated deinterlacing and audio synchronization for VHS captures"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -27,41 +27,40 @@ pyyaml = "^6.0.3"
 optional = true
 
 [tool.poetry.group.ml-heavy.dependencies]
-torch = { version = "2.14.0+cu132", source = "pytorch-cu132", markers = "platform_system == 'Windows' and python_version == '3.12' and implementation_name == 'cpython'" }
-torchvision = { version = "0.29.0+cu132", source = "pytorch-cu132", markers = "platform_system == 'Windows' and python_version == '3.12' and implementation_name == 'cpython'" }
-torchaudio = { version = "2.11.0", markers = "platform_system == 'Windows' and python_version == '3.12' and implementation_name == 'cpython'" }
-audio-separator = { version = "^0.47.0", extras = ["gpu"], markers = "platform_system != 'Darwin'" }
-# CUDA component pins below align with the prebuilt torch 2.14.0+cu132 wheel,
-# which is built and tested against CUDA 13.2 (13.2.2 / Update 2: cudart 13.2.86 /
-# nvrtc 13.2.86 / cublas 13.4.1.3; cudnn mirrors torch's declared 9.24.0.43).
-# CUDA 13.3/13.4 (cudart 13.4.49 / nvrtc 13.4.59 / cublas 13.7.0.27) cannot be
-# adopted until PyTorch publishes a cu133/cu134 build on one of the checked
-# stable, test, or nightly wheel indexes.
-nvidia-cudnn-cu13 = { version = "9.24.0.43", markers = "platform_system == 'Windows' and python_version == '3.12' and implementation_name == 'cpython'" }
-nvidia-cublas = { version = "13.4.1.3", markers = "platform_system == 'Windows' and python_version == '3.12' and implementation_name == 'cpython'" }
-onnxruntime-gpu = { version = "^1.30.0", extras = ["cuda", "cudnn"], markers = "platform_system != 'Darwin'" }
+torch = { version = "2.15.0+cu134", source = "pytorch-cu134", markers = "platform_system == 'Windows' and python_version == '3.12' and implementation_name == 'cpython'" }
+torchvision = { version = "0.29.2+cu134", source = "pytorch-cu134", markers = "platform_system == 'Windows' and python_version == '3.12' and implementation_name == 'cpython'" }
+torchaudio = { version = "2.11.1", markers = "platform_system == 'Windows' and python_version == '3.12' and implementation_name == 'cpython'" }
+audio-separator = { version = "^0.48.0", extras = ["gpu"], markers = "platform_system != 'Darwin'" }
+# CUDA component pins below align with the prebuilt torch 2.15.0+cu134 wheel,
+# which is built against cuda-toolkit 13.4.1 (cudart 13.4.49 / nvrtc 13.4.59 /
+# cublas 13.7.0.27; cudnn mirrors torch's declared 9.26.0.51). Newer component
+# builds (cudart/nvrtc 13.4.92, cublas 13.8.x) are not adopted until PyTorch
+# ships a wheel built against them.
+nvidia-cudnn-cu13 = { version = "9.26.0.51", markers = "platform_system == 'Windows' and python_version == '3.12' and implementation_name == 'cpython'" }
+nvidia-cublas = { version = "13.7.0.27", markers = "platform_system == 'Windows' and python_version == '3.12' and implementation_name == 'cpython'" }
+onnxruntime-gpu = { version = "^1.31.1", extras = ["cuda", "cudnn"], markers = "platform_system != 'Darwin'" }
 # Darwin is excluded to match audio-separator above: the numba/llvmlite chain
 # librosa pulls has no macOS x86_64 wheel and would fall back to a source build
 # (needs system LLVM). Prefer no install over building — see AGENTS.md.
 librosa = { version = "^1.0.0", markers = "platform_system != 'Darwin'" }
-nvidia-cuda-runtime = { version = "13.2.86", markers = "platform_system != 'Darwin'" }
-nvidia-cuda-nvrtc = { version = "13.2.86", markers = "platform_system != 'Darwin'" }
+nvidia-cuda-runtime = { version = "13.4.49", markers = "platform_system != 'Darwin'" }
+nvidia-cuda-nvrtc = { version = "13.4.59", markers = "platform_system != 'Darwin'" }
 vapoursynth = "==79"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^9.1.1"
+pytest = "^9.2.0"
 pytest-cov = "^7.1.0"
 genbadge = "^1.1.3"
-pylint = "^4.0.8"
-flake8 = "^7.3.0"
-ruff = "^0.16.7"
-isort = "^9.0.1"
+pylint = "^4.1.3"
+flake8 = "^7.5.0"
+ruff = "^0.17.3"
+isort = "^9.0.2"
 radon = "^6.0.1"
 defusedxml = "^0.7.1"
 mdformat = "^1.0.0"
-mdformat-frontmatter = "^2.1.2"
-pymarkdownlnt = "^0.9.40"
-black = "^26.5.1"
+mdformat-frontmatter = "^2.2.0"
+pymarkdownlnt = "^0.9.41"
+black = "^26.10.1"
 taplo = "^0.9.3"
 bandit = "^1.9.4"
 pip-audit = "^2.10.1"
@@ -112,6 +111,6 @@ min-public-methods = 0
 python_version = "3.12"
 
 [[tool.poetry.source]]
-name = "pytorch-cu132"
-url = "https://download.pytorch.org/whl/cu132"
+name = "pytorch-cu134"
+url = "https://download.pytorch.org/whl/cu134"
 priority = "explicit"

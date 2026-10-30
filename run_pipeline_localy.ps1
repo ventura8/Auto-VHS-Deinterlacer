@@ -40,7 +40,7 @@ function Invoke-PoetryCommand {
 }
 
 Invoke-Step "Install Poetry" {
-    Invoke-CheckedCommand $venvPy @("-m", "pip", "install", "poetry==2.4.3")
+    Invoke-CheckedCommand $venvPy @("-m", "pip", "install", "poetry==2.5.1")
 }
 
 Invoke-Step "Sync Poetry lock file" {

@@ -15,6 +15,9 @@ Use this skill to verify VapourSynth script (.vpy) synthesis, QTGMC deinterlacin
 1. **Dual-Mode VapourSynth Execution**:
    - Primary: `modules/runtime/vspipe.py` invokes external `vspipe.exe` streaming raw YUV to FFmpeg.
    - Fallback: `modules/runtime/vspipe_native.py` runs embedded VapourSynth Python bindings if `vspipe.exe` is absent or fails.
+1. **Import Isolation**:
+   - The generated `.vpy` header must put trusted roots (project root, venv site-packages, portable `vs/`) first and drop `''`, relative entries, the script folder and the working folder from `sys.path`; never add the per-video workspace as a module search path.
+   - `tests/unit/test_vpy_import_isolation.py` proves a `havsfunc.py` planted in the workspace is never imported.
 1. **Hardware Acceleration Tiers**:
    - `modules/core/config.py` evaluates system RAM, CPU cores, and NVIDIA CUDA GPU VRAM to dynamically configure optimal memory allocation, thread count, and hardware decoding.
 

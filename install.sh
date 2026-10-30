@@ -99,7 +99,7 @@ echo "[INFO] Upgrading pip..."
 "$VENV_PIP" install --upgrade pip
 
 echo "[INFO] Installing Poetry..."
-"$VENV_PIP" install poetry==2.4.3
+"$VENV_PIP" install poetry==2.5.1
 
 # ------------------------------------------------------------------------------
 # 5. Install Dependencies via Poetry
