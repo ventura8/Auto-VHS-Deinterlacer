@@ -59,7 +59,7 @@ if ($LASTEXITCODE -ne 0) { throw "Python 3.12 64-bit check failed with exit code
 
 # 2. Pinned Poetry version
 $poetryVerOutput = (& .\.VENV\Scripts\python.exe -m poetry --version)
-if ($LASTEXITCODE -ne 0 -or $poetryVerOutput -notmatch '2\.4\.1') {
+if ($LASTEXITCODE -ne 0 -or $poetryVerOutput -notmatch '2\.5\.1') {
     throw "Poetry version check failed! Expected 2.5.1, got: $poetryVerOutput"
 }
 

@@ -77,8 +77,9 @@ files behind.
   re-processing, and otherwise reuses finished segments from the workspace.
   Interrupted `*.part.*` files are deleted at every start, and so is anything
   in the workspace root the pipeline did not create itself (for example a
-  planted `*.py` module or a symlink), because the generated script is
-  evaluated with that folder as its working directory.
+  planted `*.py` module, a symlink or a Windows junction), because the
+  generated script is evaluated with that folder as its working directory. If
+  something cannot be removed, the job fails instead of running.
 - **Import Isolation**: The generated `restore.vpy` rebuilds `sys.path` with
   the project root, the venv site-packages and the portable VapourSynth folder
   first, and drops `''`, relative entries, the script folder and the

@@ -106,12 +106,25 @@ def _expected_root_names(workspace: VideoWorkspace) -> set[str]:
     return {path.name for path in owned}
 
 
+def _is_link(path: Path) -> bool:
+    """Return whether ``path`` is a symlink or a Windows directory junction.
+
+    ``Path.is_symlink()`` is false for NTFS junctions while ``Path.is_dir()``
+    follows them, so junctions must be checked explicitly.
+    """
+    return path.is_symlink() or path.is_junction()
+
+
 def _remove_entry(path: Path):
-    """Delete one file, symlink or folder, ignoring filesystem errors."""
-    if path.is_dir() and not path.is_symlink():
-        shutil.rmtree(path, ignore_errors=True)
+    """Delete one file, link or folder without following links; failures propagate.
+
+    ``Path.unlink()`` removes the link itself, including directory symlinks and
+    junctions on Windows, never the target's contents.
+    """
+    if _is_link(path) or not path.is_dir():
+        path.unlink(missing_ok=True)
     else:
-        _unlink_quiet(path)
+        shutil.rmtree(path)
 
 
 def remove_foreign_entries(workspace: VideoWorkspace):
@@ -121,9 +134,12 @@ def remove_foreign_entries(workspace: VideoWorkspace):
     shared folder, an archive, a USB stick). Anything unexpected there, such as
     a planted ``havsfunc.py`` or a symlink standing in for one of the owned
     folders, is removed before the generated script is evaluated in it.
+
+    Removal failures raise ``OSError`` so the job stops before anything is
+    written through a link or evaluated next to a planted module.
     """
-    if workspace.root.is_symlink():
-        _unlink_quiet(workspace.root)
+    if _is_link(workspace.root):
+        _remove_entry(workspace.root)
     if not workspace.root.is_dir():
         return
     expected = _expected_root_names(workspace)
@@ -133,7 +149,7 @@ def remove_foreign_entries(workspace: VideoWorkspace):
 
 def _foreign_entries(root: Path, expected: set[str]) -> list[Path]:
     """Return root entries that are symlinks or not one of the expected names."""
-    return [entry for entry in root.iterdir() if entry.name not in expected or entry.is_symlink()]
+    return [entry for entry in root.iterdir() if entry.name not in expected or _is_link(entry)]
 
 
 def prepare_workspace(workspace: VideoWorkspace):

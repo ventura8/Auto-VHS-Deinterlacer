@@ -183,3 +183,39 @@ def test_header_drops_relative_entries(tmp_path, entry):
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == ["False", "trusted"]
+
+
+def test_prepare_workspace_treats_junctions_as_links(tmp_path):
+    """A Windows junction standing in for an owned folder is removed, not followed."""
+    _, _, workspace = _build_layout(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep", encoding="utf-8")
+    # Junctions only exist on NTFS. Emulate one with a directory symlink that,
+    # like a junction, reports is_symlink() False and is_junction() True.
+    workspace.index_dir.symlink_to(outside, target_is_directory=True)
+    real_is_symlink, real_is_junction = Path.is_symlink, Path.is_junction
+
+    def fake_is_symlink(path):
+        return path != workspace.index_dir and real_is_symlink(path)
+
+    def fake_is_junction(path):
+        return (path == workspace.index_dir and real_is_symlink(path)) or real_is_junction(path)
+
+    with patch.object(Path, "is_symlink", fake_is_symlink), patch.object(Path, "is_junction", fake_is_junction):
+        ws_module.prepare_workspace(workspace)
+
+    assert workspace.index_dir.is_dir() and not workspace.index_dir.is_symlink()
+    assert (outside / "keep.txt").exists()
+
+
+def test_prepare_workspace_stops_when_foreign_entry_cannot_be_removed(tmp_path):
+    """A planted file that cannot be deleted aborts preparation instead of continuing."""
+    _, _, workspace = _build_layout(tmp_path)
+
+    with patch.object(Path, "unlink", side_effect=PermissionError("locked")):
+        with pytest.raises(PermissionError):
+            ws_module.prepare_workspace(workspace)
+
+    assert (workspace.root / "havsfunc.py").exists()
+    assert not workspace.segments_dir.exists()
