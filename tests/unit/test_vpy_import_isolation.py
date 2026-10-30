@@ -142,7 +142,8 @@ def test_prepare_workspace_replaces_symlinked_root(tmp_path):
 
     ws_module.prepare_workspace(workspace)
 
-    assert workspace.root.is_dir() and not workspace.root.is_symlink()
+    assert workspace.root.is_dir()
+    assert not workspace.root.is_symlink()
     assert (elsewhere / "havsfunc.py").exists()
     assert sorted(path.name for path in workspace.root.iterdir()) == ["index", "segments"]
 
@@ -192,7 +193,8 @@ def test_prepare_workspace_treats_junctions_as_links(tmp_path):
     outside.mkdir()
     (outside / "keep.txt").write_text("keep", encoding="utf-8")
     # Junctions only exist on NTFS. Emulate one with a directory symlink that,
-    # like a junction, reports is_symlink() False and is_junction() True.
+    # like a junction, reports is_symlink() False and is_junction() True, and
+    # that rmdir() removes as a link the way Windows RemoveDirectoryW does.
     workspace.index_dir.symlink_to(outside, target_is_directory=True)
     real_is_symlink, real_is_junction = Path.is_symlink, Path.is_junction
 
@@ -202,10 +204,27 @@ def test_prepare_workspace_treats_junctions_as_links(tmp_path):
     def fake_is_junction(path):
         return (path == workspace.index_dir and real_is_symlink(path)) or real_is_junction(path)
 
-    with patch.object(Path, "is_symlink", fake_is_symlink), patch.object(Path, "is_junction", fake_is_junction):
+    real_rmdir = Path.rmdir
+    removed = []
+
+    def fake_rmdir(path):
+        if path == workspace.index_dir:
+            removed.append(path)
+            os.unlink(path)
+            return
+        real_rmdir(path)
+
+    with (
+        patch.object(Path, "is_symlink", fake_is_symlink),
+        patch.object(Path, "is_junction", fake_is_junction),
+        patch.object(Path, "rmdir", fake_rmdir),
+    ):
         ws_module.prepare_workspace(workspace)
 
-    assert workspace.index_dir.is_dir() and not workspace.index_dir.is_symlink()
+    assert removed == [workspace.index_dir]
+
+    assert workspace.index_dir.is_dir()
+    assert not workspace.index_dir.is_symlink()
     assert (outside / "keep.txt").exists()
 
 

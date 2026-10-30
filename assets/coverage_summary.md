@@ -1,8 +1,8 @@
 ## 📊 Code Coverage Report
 
 **Total Coverage:** 95.52%
-**Branch Coverage:** 86.83%
-**Generated:** 2026-10-30 18:44:19
+**Branch Coverage:** 86.88%
+**Generated:** 2026-10-30 18:51:14
 
 | File | Coverage | Branches |
 | :--- | :---: | :---: |

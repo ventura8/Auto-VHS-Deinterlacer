@@ -118,10 +118,13 @@ def _is_link(path: Path) -> bool:
 def _remove_entry(path: Path):
     """Delete one file, link or folder without following links; failures propagate.
 
-    ``Path.unlink()`` removes the link itself, including directory symlinks and
-    junctions on Windows, never the target's contents.
+    Junctions are removed with the non-recursive ``Path.rmdir()``, which drops
+    the junction itself and never the target's contents. Symlinks and files use
+    ``Path.unlink()``.
     """
-    if _is_link(path) or not path.is_dir():
+    if path.is_junction():
+        path.rmdir()
+    elif _is_link(path) or not path.is_dir():
         path.unlink(missing_ok=True)
     else:
         shutil.rmtree(path)
